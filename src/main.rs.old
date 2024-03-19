@@ -1,0 +1,236 @@
+use std::fmt::Debug;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Point {
+    fn new<T: TryInto<i32>>(x: T, y: T) -> Self
+    where
+        <T as TryInto<i32>>::Error: Debug,
+    {
+        Self {
+            x: x.try_into().unwrap(),
+            y: y.try_into().unwrap(),
+        }
+    }
+}
+
+struct Size {
+    w: u32,
+    h: u32,
+}
+
+impl Size {
+    const fn new(w: u32, h: u32) -> Self {
+        Self { w, h }
+    }
+}
+
+const INPUT_SIZE: Size = Size::new(800, 600);
+const SQUARE_HSIZE: u32 = 100;
+const CORNER_HSIZE: i32 = 5;
+const TRANSFORM_MATRIX: [[f64; 3]; 3] = [
+    [-2.77777778e-01, -3.33333333e-01, 3.72222222e+02],
+    [-5.00000000e-01, 5.55555556e-02, 3.05555556e+02],
+    [-1.11111111e-03, -5.55555556e-04, 1.00000000e+00],
+];
+
+type Image = image::ImageBuffer<image::Rgb<u8>, Vec<u8>>;
+fn make_black_img(s: Size) -> Image {
+    let mut imgbuf = image::ImageBuffer::new(s.w, s.h);
+    for (_x, _y, pixel) in imgbuf.enumerate_pixels_mut() {
+        *pixel = image::Rgb::<u8>([0, 0, 0]);
+    }
+    imgbuf
+}
+
+#[derive(Debug)]
+struct Vec2 {
+    x: f64,
+    y: f64,
+}
+
+/// Returns (w1, w2) where P = A + w1(B - A) + w2(C - A)
+fn as_weights(p: &Vec2, a: &Vec2, b: &Vec2, c: &Vec2) -> (f64, f64) {
+    let ca_y = c.y - a.y;
+    let pa_y = p.y - a.y;
+    let ca_x = c.x - a.x;
+    let ba_x = b.x - a.x;
+    let ba_y = b.y - a.y;
+
+    let w1 = (a.x * ca_y + pa_y * ca_x - p.x * ca_y) / (ba_y * ca_x - ba_x * ca_y);
+    let w2 = (pa_y - w1 * ba_y) / ca_y;
+    return (w1, w2);
+}
+
+fn lies_within(w1: f64, w2: f64) -> bool {
+    return w1 >= 0f64 && w2 >= 0f64 && w1 + w2 <= 1f64;
+}
+
+fn bilinear_interp(w1: f64, w2: f64, a: &image::Rgb<u8>, b: &image::Rgb<u8>) -> image::Rgb<u8> {
+    let to_arr = |c: image::Rgb<u8>| [c[0] as f64, c[1] as f64, c[2] as f64];
+    let a = to_arr(*a);
+    let b = to_arr(*b);
+    let p = [
+        w1 * a[0] + w2 * b[0],
+        w1 * a[1] + w2 * b[1],
+        w1 * a[2] + w2 * b[2],
+    ];
+    return image::Rgb::<u8>([p[0] as u8, p[1] as u8, p[2] as u8]);
+}
+
+fn main() {
+    let pts: [Point; 4] = [
+        Point::new(
+            INPUT_SIZE.w / 2 - SQUARE_HSIZE,
+            INPUT_SIZE.h / 2 - SQUARE_HSIZE,
+        ),
+        Point::new(
+            INPUT_SIZE.w / 2 + SQUARE_HSIZE,
+            INPUT_SIZE.h / 2 - SQUARE_HSIZE,
+        ),
+        Point::new(
+            INPUT_SIZE.w / 2 + SQUARE_HSIZE,
+            INPUT_SIZE.h / 2 + SQUARE_HSIZE,
+        ),
+        Point::new(
+            INPUT_SIZE.w / 2 - SQUARE_HSIZE,
+            INPUT_SIZE.h / 2 + SQUARE_HSIZE,
+        ),
+    ];
+
+    let original = {
+        let mut imgbuf = make_black_img(INPUT_SIZE);
+        for pt in pts {
+            for x in pt.x - CORNER_HSIZE..pt.x + CORNER_HSIZE {
+                for y in pt.y - CORNER_HSIZE..pt.y + CORNER_HSIZE {
+                    imgbuf.put_pixel(x as u32, y as u32, image::Rgb::<u8>([255, 255, 255]));
+                }
+            }
+        }
+        imgbuf
+    };
+
+    let dst_pts = {
+        let mut dst: Vec<Vec<Vec2>> = Vec::new();
+        for x in 0..INPUT_SIZE.w {
+            let mut row = Vec::new();
+            for y in 0..INPUT_SIZE.h {
+                row.push(Vec2 { x: -1f64, y: -1f64 });
+            }
+            dst.push(row);
+        }
+
+        for (x, y, _pix) in original.enumerate_pixels() {
+            let src = [x as f64, y as f64, 1f64];
+            let mut dst_pt = [0f64; 3];
+            for j in 0..3 {
+                for i in 0..3 {
+                    dst_pt[j] += TRANSFORM_MATRIX[j][i] * src[i];
+                }
+            }
+            dst_pt[0] /= dst_pt[2];
+            dst_pt[1] /= dst_pt[2];
+
+            dst_pt[0] = dst_pt[0].max(0f64).min(INPUT_SIZE.w as f64 - 1f64);
+            dst_pt[1] = dst_pt[1].max(0f64).min(INPUT_SIZE.h as f64 - 1f64);
+
+            dst[x as usize][y as usize] = Vec2 {
+                x: dst_pt[0],
+                y: dst_pt[1],
+            };
+        }
+
+        dst
+    };
+
+    let transformed = {
+        let mut imgbuf = make_black_img(INPUT_SIZE);
+        for x in 0..INPUT_SIZE.w as usize - 1 {
+            for y in 0..INPUT_SIZE.h as usize - 1 {
+                let a = &dst_pts[x][y];
+                let b = &dst_pts[x + 1][y];
+                let c = &dst_pts[x][y + 1];
+                let d = &dst_pts[x + 1][y + 1];
+
+                let min_x = a.x.min(b.x).min(c.x).min(d.x).round() as u32;
+                let max_x = a.x.max(b.x).max(c.x).max(d.x).round() as u32;
+                let min_y = a.y.min(b.y).min(c.y).min(d.y).round() as u32;
+                let max_y = a.y.max(b.y).max(c.y).max(d.y).round() as u32;
+
+                for px in min_x..max_x {
+                    for py in min_y..max_y {
+                        let p = Vec2 {
+                            x: px as f64,
+                            y: py as f64,
+                        };
+                        let (abd_w1, abd_w2) = as_weights(&p, a, b, d);
+                        if lies_within(abd_w1, abd_w2) {
+                            imgbuf.put_pixel(
+                                px,
+                                py,
+                                bilinear_interp(
+                                    abd_w1,
+                                    abd_w2,
+                                    original.get_pixel(x as u32, y as u32),
+                                    original.get_pixel(x as u32 + 1, y as u32),
+                                ),
+                            );
+                            continue;
+                        }
+
+                        let (acd_w1, acd_w2) = as_weights(&p, a, c, d);
+                        if lies_within(acd_w1, acd_w2) {
+                            imgbuf.put_pixel(
+                                px,
+                                py,
+                                bilinear_interp(
+                                    acd_w1,
+                                    acd_w2,
+                                    original.get_pixel(x as u32, y as u32),
+                                    original.get_pixel(x as u32, y as u32 + 1),
+                                ),
+                            );
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        imgbuf
+    };
+
+    original.save("outputs/original.png").unwrap();
+    transformed.save("outputs/transformed.png").unwrap();
+}
+
+/*    // https://github.com/b3c/OpenCV/blob/master/modules/imgproc/src/imgwarp.cpp
+   // https://www.youtube.com/watch?v=y2sNnI4NrDc
+   let transformed = {
+       let mut imgbuf = make_black_img(INPUT_SIZE);
+
+       for (x, y, pixel) in original.enumerate_pixels() {
+           let src_pt = [x as f64, y as f64, 1f64];
+           let mut dst_pt = [0f64; 3];
+           for j in 0..3 {
+               for i in 0..3 {
+                   dst_pt[j] += TRANSFORM_MATRIX[j][i] * src_pt[i];
+               }
+           }
+
+           dst_pt[0] /= dst_pt[2];
+           dst_pt[1] /= dst_pt[2];
+
+           let dst_x = dst_pt[0].round() as u32;
+           let dst_y = dst_pt[1].round() as u32;
+
+           let dst_x = dst_x.min(INPUT_SIZE.w - 1);
+           let dst_y = dst_y.min(INPUT_SIZE.h - 1);
+
+           imgbuf.put_pixel(dst_x, dst_y, *pixel);
+       }
+       imgbuf
+   };
+*/
