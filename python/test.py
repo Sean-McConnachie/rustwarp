@@ -72,8 +72,8 @@ R = np.array([
 ])
 
 # combine the two transformations
-# M = np.dot(M, R)
-M = R
+M = np.dot(M, R)
+# M = R
 
 
 
