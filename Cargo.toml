@@ -10,3 +10,7 @@ env_logger = "0.9.1"
 pollster = "0.2.5"
 futures-intrusive = "0.4"
 bytemuck = { version = "1.12.1", features = ["derive"] }
+
+typenum = "1.17.0"
+generic-array = "1.0.0"
+paste = "1.0"

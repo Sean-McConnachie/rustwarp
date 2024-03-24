@@ -3,7 +3,7 @@
 // adapter, features, device, queue, shader_module, input_buffer, out_buffer, query_buffer, bind_group_layout
 // computer_pipeline_layout, pipeline, bind_group, encoder, oneshot_chan,
 
-use crate::cpu_transform;
+use crate::host;
 use wgpu::util::DeviceExt;
 
 type Vec2U32 = [u32; 2];
@@ -23,9 +23,13 @@ struct ImTranform {
 }
 
 #[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone, Debug)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone, Debug, Default)]
 struct Pixel {
-    color: Vec3F32,
+    // color: Vec3F32,
+    x: f32,
+    y: f32,
+    z: f32,
+    _pad: [f32; 1],
 }
 
 pub struct State {
@@ -91,7 +95,16 @@ impl State {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, // | wgpu::BufferUsages::COPY_DST,
         });
 
-        let in_raw: Vec<[f32; 4]> = vec![[1.0; 4]; 6];
+        // let in_raw: Vec<[f32; 4]> = vec![[1.0; 4]; 6];
+        let in_raw: Vec<Pixel> = vec![
+            Pixel {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+                ..Default::default()
+            };
+            6
+        ];
         // let in_raw: Vec<f32> = vec![0.0, 1.0];
         let in_bytes: &[u8] = bytemuck::cast_slice(&in_raw[..]);
         let in_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

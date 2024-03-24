@@ -1,2 +1,2 @@
-pub mod cpu_transform;
-pub mod gpu;
+pub mod device;
+pub mod host;
