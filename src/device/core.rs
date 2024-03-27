@@ -17,6 +17,17 @@ pub trait WDevToHost {
     fn from_bytes(&mut self, bytes: &[u8]);
 }
 
+#[macro_export]
+macro_rules! wvec_impls {
+    (struct $struct_name:ident { $($field_name:ident : $field_type:ty),* $(,)? }) => {
+        #[repr(C)]
+        #[derive(Copy, Clone, Debug, Default, Zeroable, Pod)]
+        struct $struct_name {
+            $( $field_name : $field_type ),*
+        }
+    };
+}
+
 macro_rules! wvec_def_struct {
     ($struct:ident { $($fields:ident),* }, $pad:expr) => {
         paste! {

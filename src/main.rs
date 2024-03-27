@@ -1,14 +1,13 @@
 use bytemuck::{Pod, Zeroable};
-use rustwarp::device::core::*;
 use rustwarp::*;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default, Zeroable, Pod)]
-struct Temp {
-    v0: wvec2!(bool, 14), // 16 bytes type(2 * 1) + pad(14 * 1)
-    v1: wvec3!(f32, 4),   // 16 bytes type(3 * 4) + pad(4 * 1)
-    v2: wvec4!(f32, 0),   // 16 bytes type(4 * 4) + pad(0 * 1)
-}
+wvec_impls!(
+    struct Temp {
+        v0: wvec2!(bool, 14), // 16 bytes type(2 * 1) + pad(14 * 1)
+        v1: wvec3!(f32, 4),   // 16 bytes type(3 * 4) + pad(4 * 1)
+        v2: wvec4!(f32, 0),   // 16 bytes type(4 * 4) + pad(0 * 1)
+    }
+);
 
 fn main() {
     let mut temp = vec![Temp::default(); 2];
