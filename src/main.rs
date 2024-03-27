@@ -1,19 +1,24 @@
+use bytemuck::{Pod, Zeroable};
 use rustwarp::device::core::*;
-use rustwarp::{typenum, wvec2, wvec_call};
+use rustwarp::*;
 
 #[repr(C)]
-#[derive(Copy, Debug, Default, Clone, bytemuck::Zeroable, bytemuck::Pod)]
-struct Test {
-    t1: wvec2!(f32, 16),
+#[derive(Copy, Clone, Debug, Default, Zeroable, Pod)]
+struct Temp {
+    v0: wvec2!(bool, 14), // 16 bytes type(2 * 1) + pad(14 * 1)
+    v1: wvec3!(f32, 4),   // 16 bytes type(3 * 4) + pad(4 * 1)
+    v2: wvec4!(f32, 0),   // 16 bytes type(4 * 4) + pad(0 * 1)
 }
 
 fn main() {
-    let x = vec![Test::default(); 10];
-    dbg!(x);
-    // let bytes: &[u8] = bytemuck::cast_slice(&x);
+    let mut temp = vec![Temp::default(); 2];
+    temp[0].v0.x = true;
+    temp[1].v1.z = 1.234;
+    let bytes: &[u8] = bytemuck::cast_slice(&temp);
+    println!("{:?}", bytes);
+    let y: &[Temp] = bytemuck::try_cast_slice(bytes).unwrap();
+    println!("{:?}", y);
 
-    // cpu_transform::run_test_transform();
-    // pollster::block_on(device::setup::State::new());
-    // let x = size_of!(device::core::Pix);
-    // dbg!(x);
+    assert!(temp[0].v0.x == y[0].v0.x);
+    assert!(temp[1].v1.z == y[1].v1.z);
 }

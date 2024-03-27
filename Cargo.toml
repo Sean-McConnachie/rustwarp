@@ -11,6 +11,6 @@ pollster = "0.2.5"
 futures-intrusive = "0.4"
 bytemuck = { version = "1.12.1", features = ["derive"] }
 
-typenum = "1.17.0"
-generic-array = "1.0.0"
+zerocopy = "0.7.32"
+zerocopy-derive = "0.X"
 paste = "1.0"
