@@ -2,7 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use paste::paste;
 
 // TODO: WScalars; AbstractInt, AbstractFloat, f16
-pub trait WScalars {}
+pub trait WScalars: Copy + Zeroable {}
 impl WScalars for bool {}
 impl WScalars for u32 {}
 impl WScalars for i32 {}
@@ -35,7 +35,7 @@ macro_rules! wvec_def_struct {
             #[derive(Copy, Clone, Debug, Default, Zeroable)]
             pub struct [< $struct P $pad >] <T>
             where
-                T: WScalars + Copy,
+                T: WScalars,
             {
                 $(pub $fields: T,)*
                 _pad: [u8; $pad],
@@ -43,7 +43,7 @@ macro_rules! wvec_def_struct {
 
             unsafe impl<T> Pod for [< $struct P $pad >]<T>
             where
-                T: WScalars + Copy + Zeroable + 'static,
+                T: WScalars + 'static,
             { }
         }
     };
@@ -98,3 +98,37 @@ wvec_def!(
     wvec4,
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 );
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Zeroable)]
+pub struct WMat<T, const N: usize, const M: usize, const FORCED_M: usize>([[T; FORCED_M]; N])
+where
+    T: WScalars,
+    [[T; FORCED_M]; N]: Default + Zeroable;
+
+unsafe impl<T, const N: usize, const M: usize, const FORCED_M: usize> Pod
+    for WMat<T, N, M, FORCED_M>
+where
+    T: WScalars + 'static,
+    [[T; FORCED_M]; N]: Copy + Zeroable + Default,
+{
+}
+
+// impl WMat
+impl<T: WScalars, const N: usize, const M: usize, const FORCED_M: usize> WMat<T, N, M, FORCED_M>
+where
+    [[T; FORCED_M]; N]: Default + Zeroable,
+{
+    pub fn set(&mut self, x: usize, y: usize, v: T) {
+        assert!(x < M && y < N);
+        self.0[x][y] = v;
+    }
+
+    pub fn get(&self, x: usize, y: usize) -> T {
+        self.0[x][y]
+    }
+
+    pub fn matrix(&self) -> &[[T; FORCED_M]; N] {
+        &self.0
+    }
+}

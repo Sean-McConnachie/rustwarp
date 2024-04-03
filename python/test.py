@@ -1,5 +1,44 @@
+
 import cv2
 import numpy as np
+
+def print_rust(m):
+    print("[")
+    for i in range(3):
+        print(f"    [{m[i][0]}, {m[i][1]}, {m[i][2]}],")
+    print("]\n")
+
+# m = np.array([
+#     [0.5, 0.0, 0.0],
+#     [0.0, 1.0, 0.0],
+#     [0.0, 0.0, 1.0],
+# ])
+    
+im = np.zeros((800, 800, 3), dtype=np.uint8)
+for x in range(300, 500):
+    im[300, x] = [255, 255, 255]
+    im[500, x] = [255, 255, 255]
+for y in range(300, 500):
+    im[y, 300] = [255, 255, 255]
+    im[y, 500] = [255, 255, 255]
+
+# rotate 45deg
+rad = np.pi/11
+m = np.array([
+    [np.cos(rad), -np.sin(rad), 0.0],
+    [np.sin(rad), np.cos(rad), 0.0],
+    [0.0, 0.0, 1.0],
+])
+
+m_inv = np.linalg.inv(m)
+print_rust(m)
+print_rust(m_inv)
+
+# perform the transformation
+warped = cv2.warpPerspective(im, m, (800, 800))
+cv2.imwrite("rotated.png", warped)
+
+exit(0)
 
 class Point:
     def __init__(self, x, y):
