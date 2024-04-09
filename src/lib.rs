@@ -1,2 +1,5 @@
-pub mod device;
-pub mod host;
+#[macro_use]
+pub mod core;
+pub mod image;
+pub mod modules;
+pub mod setup;

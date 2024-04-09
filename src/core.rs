@@ -1,3 +1,6 @@
+use core::fmt;
+use std::ops::{Add, Div, Mul, Neg, Sub};
+
 use bytemuck::{Pod, Zeroable};
 use paste::paste;
 
@@ -18,13 +21,20 @@ pub trait WDevToHost {
 }
 
 #[macro_export]
-macro_rules! wvec_impls {
+macro_rules! wvec_def {
     (struct $struct_name:ident { $($field_name:ident : $field_type:ty),* $(,)? }) => {
         #[repr(C)]
         #[derive(Copy, Clone, Debug, Default, Zeroable, Pod)]
         struct $struct_name {
             $( $field_name : $field_type ),*
         }
+    };
+}
+
+#[macro_export]
+macro_rules! wvec_impl {
+    (block: $block:block) => {
+        $block
     };
 }
 
@@ -66,7 +76,7 @@ macro_rules! wvec_def_macro_impl {
             macro_rules! $macro {
                 $(
                     ($typ:ty, [< $pad >]) => {
-                        crate::device::core::[< $struct P $pad >]<$typ>
+                        $crate::core::[< $struct P $pad >]<$typ>
                     };
                 )*
             }
@@ -99,6 +109,8 @@ wvec_def!(
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 );
 
+pub type WMat3x3Affine = WMat<f32, 3, 3, 4>;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Zeroable)]
 pub struct WMat<T, const N: usize, const M: usize, const FORCED_M: usize>([[T; FORCED_M]; N])
@@ -114,11 +126,49 @@ where
 {
 }
 
+impl<T: WScalars, const N: usize, const M: usize, const FORCED_M: usize> fmt::Display
+    for WMat<T, N, M, FORCED_M>
+where
+    T: fmt::Display,
+    [[T; FORCED_M]; N]: Default + Zeroable,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const SPACING: usize = 15;
+        write!(f, "[ ")?;
+        for i in 0..N {
+            for j in 0..M {
+                if i != 0 && j == 0 {
+                    write!(f, "  ")?;
+                };
+                write!(f, "{:width$}", self.0[i][j], width = SPACING)?;
+            }
+            if i != N - 1 {
+                write!(f, "\n")?;
+            }
+        }
+        write!(f, " ]")?;
+        Ok(())
+    }
+}
+
 // impl WMat
 impl<T: WScalars, const N: usize, const M: usize, const FORCED_M: usize> WMat<T, N, M, FORCED_M>
 where
+    T: Default + Copy,
     [[T; FORCED_M]; N]: Default + Zeroable,
 {
+    pub fn from_col_major<const K: usize, const D: usize>(data: [[T; K]; D]) -> Self {
+        assert_eq!(D, N);
+        assert_eq!(K, M);
+        let mut m = Self::default();
+        for i in 0..N {
+            for j in 0..M {
+                m.0[i][j] = data[j][i];
+            }
+        }
+        m
+    }
+
     pub fn set(&mut self, x: usize, y: usize, v: T) {
         assert!(x < M && y < N);
         self.0[x][y] = v;
@@ -130,5 +180,62 @@ where
 
     pub fn matrix(&self) -> &[[T; FORCED_M]; N] {
         &self.0
+    }
+
+    pub fn matrix_mut(&mut self) -> &mut [[T; FORCED_M]; N] {
+        &mut self.0
+    }
+}
+
+impl<T: WScalars, const FORCED_M: usize> WMat<T, 3, 3, FORCED_M>
+where
+    T: Default
+        + Mul<Output = T>
+        + Sub<Output = T>
+        + Neg<Output = T>
+        + Add<Output = T>
+        + Div<Output = T>
+        + From<u8>
+        + Copy
+        + PartialEq,
+    [[T; FORCED_M]; 3]: Default + Zeroable,
+{
+    pub fn try_inverse(&self) -> Result<Self, Box<dyn std::error::Error>> {
+        let m = &self.0;
+        let a = m[0][0];
+        let b = m[0][1];
+        let c = m[0][2];
+        let d = m[1][0];
+        let e = m[1][1];
+        let f = m[1][2];
+        let g = m[2][0];
+        let h = m[2][1];
+        let i = m[2][2];
+
+        let t_a = e * i - f * h;
+        let t_b = -(d * i - f * g);
+        let t_c = d * h - e * g;
+        let t_d = -(b * i - c * h);
+        let t_e = a * i - c * g;
+        let t_f = -(a * h - b * g);
+        let t_g = b * f - c * e;
+        let t_h = -(a * f - c * d);
+        let t_i = a * e - b * d;
+
+        let det = a * t_a + b * t_b + c * t_c;
+        if det == T::from(0) {
+            return Err("Determinant is zero. There exists no inverse for this matrix!".into());
+        }
+        let inv_det = T::from(1) / det;
+
+        Ok(Self::from_col_major([
+            [t_a * inv_det, t_b * inv_det, t_c * inv_det],
+            [t_d * inv_det, t_e * inv_det, t_f * inv_det],
+            [t_g * inv_det, t_h * inv_det, t_i * inv_det],
+        ]))
+    }
+
+    pub fn inverse(&self) -> Self {
+        self.try_inverse().unwrap()
     }
 }

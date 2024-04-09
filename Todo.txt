@@ -1,0 +1,2 @@
+- Make math implementations for vec types (i.e. dot, cross)
+- Make factory macros for vec types (i.e. wvec3(0, 1, 2) = underlying type with x, y, z set to 0, 1, 2)
