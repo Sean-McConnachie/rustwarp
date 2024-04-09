@@ -38,6 +38,16 @@ macro_rules! wvec_impl {
     };
 }
 
+macro_rules! wvec_print_fields {
+    ($f:expr, $s:expr, $first:ident, $($rest:tt),*) => {
+        write!($f, "{}, ", $s.$first)?;
+        wvec_print_fields!($f, $s, $($rest),*);
+    };
+    ($f:expr, $s:expr, $first:ident) => {
+        write!($f, "{}", $s.$first)?;
+    };
+}
+
 macro_rules! wvec_def_struct {
     ($struct:ident { $($fields:ident),* }, $pad:expr) => {
         paste! {
@@ -55,6 +65,30 @@ macro_rules! wvec_def_struct {
             where
                 T: WScalars + 'static,
             { }
+
+            impl<T> fmt::Display for [< $struct P $pad >]<T>
+            where
+                T: WScalars + fmt::Display
+            {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    write!(f, "{}P{}(", stringify!($struct), stringify!($pad))?;
+                    wvec_print_fields!(f, self, $($fields),*);
+                    write!(f, ")")
+                }
+            }
+
+            impl<T: WScalars> [< $struct P $pad >]<T> {
+                pub fn new($($fields: T),*) -> Self {
+                    Self {
+                        $($fields,)*
+                        _pad: [0; $pad],
+                    }
+                }
+
+                pub fn set(&mut self, $($fields: T,)*) {
+                    $(self.$fields = $fields;)*
+                }
+            }
         }
     };
 }
@@ -157,13 +191,25 @@ where
     T: Default + Copy,
     [[T; FORCED_M]; N]: Default + Zeroable,
 {
-    pub fn from_col_major<const K: usize, const D: usize>(data: [[T; K]; D]) -> Self {
+    pub fn from_row_major<const K: usize, const D: usize>(data: [[T; K]; D]) -> Self {
         assert_eq!(D, N);
         assert_eq!(K, M);
         let mut m = Self::default();
         for i in 0..N {
             for j in 0..M {
                 m.0[i][j] = data[j][i];
+            }
+        }
+        m
+    }
+
+    pub fn from_col_major<const K: usize, const D: usize>(data: [[T; K]; D]) -> Self {
+        assert_eq!(K, N);
+        assert_eq!(D, M);
+        let mut m = Self::default();
+        for i in 0..N {
+            for j in 0..M {
+                m.0[i][j] = data[i][j];
             }
         }
         m
@@ -228,7 +274,7 @@ where
         }
         let inv_det = T::from(1) / det;
 
-        Ok(Self::from_col_major([
+        Ok(Self::from_row_major([
             [t_a * inv_det, t_b * inv_det, t_c * inv_det],
             [t_d * inv_det, t_e * inv_det, t_f * inv_det],
             [t_g * inv_det, t_h * inv_det, t_i * inv_det],

@@ -1,6 +1,6 @@
 use pollster::FutureExt;
 use rustwarp::{
-    core::WMat,
+    core::{WMat, WVec2P0},
     image::{Image, Pix, Size},
     modules::warp_perspective::{
         warp_perspective_cpu, warp_perspective_gpu, ImageTransform, Interpolation,
@@ -23,13 +23,17 @@ const ROTATE: M = [
 const MAT: M = ROTATE;
 
 fn main() {
+    let mut x = WVec2P0::new(1.0, 2.0);
+    x.set(2.5, 3.0);
+    println!("{}", x);
+    return;
+
     let mut state = WState::new().block_on();
 
-    let mat = WM::from_col_major(MAT);
-    // let mat = mat.inverse();
+    let mat = WM::from_row_major(MAT);
+    let mat = mat.inverse();
     println!("{}", &mat);
     let size = Size::new(1920, 1080);
-    let size = Size::new(800, 800);
     let input = {
         let mut im = Image::new(size);
         const BOX_SIZE: usize = 200 / 2;
@@ -62,15 +66,7 @@ fn main() {
         .save("outputs/input.png")
         .unwrap();
 
-    let transform = {
-        // let mut mat = WM::default();
-        // for x in 0..3 {
-        //     for y in 0..3 {
-        //         mat.set(x, y, MAT[y][x]);
-        //     }
-        // }
-        ImageTransform::new(size, mat)
-    };
+    let transform = ImageTransform::new(size, mat);
 
     let mut cpu_output = Image::new(size);
     warp_perspective_cpu(&transform, Interpolation::Bilinear, &input, &mut cpu_output);
