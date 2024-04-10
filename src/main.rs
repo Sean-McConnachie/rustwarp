@@ -1,37 +1,32 @@
-use pollster::FutureExt;
+use futures::future::join_all;
 use rustwarp::{
     core::WMat,
     image::{Image, Pix, Size},
-    modules::warp_perspective::{
-        warp_perspective_cpu, warp_perspective_gpu, ImageTransform, Interpolation,
+    modules::multiple_warp::{
+        warp_perspective_gpu, ImageTransform, Interpolation, WarpPerspectiveGpu,
     },
     setup::WState,
 };
 
-type M = [[f32; 3]; 3];
 type WM = WMat<f32, 3, 3, 4>;
-#[allow(unused)]
+
+type M = [[f32; 3]; 3];
 const IDENTITY: M = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-#[allow(unused)]
-const SCALE_XY: M = [[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-#[allow(unused)]
-const TRANSLATE_XY: M = [[1.0, 0.0, 200.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+const IM_COUNT: usize = 4;
+const PROC_COUNT: usize = 1;
 
-const ROTATE: M = [
-    [0.9594929736144975, 0.28173255684142967, 0.0],
-    [-0.2817325568414297, 0.9594929736144975, 0.0],
-    [0.0, 0.0, 1.0],
-];
-
-const MAT: M = ROTATE;
-
-fn main() {
-    let mut state = WState::new().block_on();
-
-    let mat = WM::from_row_major(MAT);
-    let mat = mat.inverse();
-    println!("{}", &mat);
+#[tokio::main]
+async fn main() {
     let size = Size::new(1920, 1080);
+    let transforms = (0..IM_COUNT)
+        .map(|i| {
+            let mut m = IDENTITY;
+            m[0][2] = 120.0 * i as f32;
+            m[1][2] = 60.0 * i as f32;
+            ImageTransform::new(size, WM::from_row_major(m))
+        })
+        .collect::<Vec<_>>();
+
     let input = {
         let mut im = Image::new(size);
         const BOX_SIZE: usize = 200 / 2;
@@ -57,35 +52,47 @@ fn main() {
         }
         im
     };
+    let inputs = (0..IM_COUNT).map(|_| input.clone()).collect::<Vec<_>>();
+    let gpu_outputs = (0..IM_COUNT).map(|_| Image::new(size)).collect::<Vec<_>>();
 
-    let _ = input
-        .rgb_image()
-        .unwrap()
-        .save("outputs/input.png")
-        .unwrap();
-
-    let transform = ImageTransform::new(size, mat);
-
-    let mut cpu_output = Image::new(size);
-    warp_perspective_cpu(&transform, Interpolation::Bilinear, &input, &mut cpu_output);
-    let _ = cpu_output
-        .rgb_image()
-        .unwrap()
-        .save("outputs/cpuoutput.png")
-        .unwrap();
-
-    let mut gpu_output = Image::new(size);
-    warp_perspective_gpu(
-        &mut state,
-        &transform,
-        Interpolation::Bilinear,
-        &input,
-        &mut gpu_output,
+    let mut states = join_all(
+        (0..PROC_COUNT)
+            .map(|_| async {
+                let state = WState::new().await;
+                WarpPerspectiveGpu::new(
+                    state,
+                    transforms.clone(),
+                    Interpolation::None,
+                    inputs.clone(),
+                    gpu_outputs.clone(),
+                )
+            })
+            .collect::<Vec<_>>(),
     )
-    .block_on();
-    let _ = gpu_output
-        .rgb_image()
-        .unwrap()
-        .save("outputs/gpuoutput.png")
-        .unwrap();
+    .await;
+
+    // create futures for each state
+    {
+        let start = std::time::Instant::now();
+        let futures = states
+            .iter_mut()
+            .map(|state| state.render_pass())
+            .collect::<Vec<_>>();
+
+        // run all futures in parallel
+        join_all(futures).await;
+        let elapsed = start.elapsed();
+        println!("Total Elapsed: {:?}", elapsed);
+    }
+
+    let _: Vec<_> = (0..PROC_COUNT)
+        .map(|i| {
+            (0..IM_COUNT).for_each(|j| {
+                let _ = states[i].dst[j]
+                    .rgb_image()
+                    .unwrap()
+                    .save(format!("outputs/{}gpuoutput{}.png", i, j));
+            });
+        })
+        .collect();
 }

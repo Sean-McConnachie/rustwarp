@@ -83,6 +83,7 @@ impl fmt::Display for Point {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Image {
     pub data: Vec<Pix>,
     pub size: Size,
