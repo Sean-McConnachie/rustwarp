@@ -2,7 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use core::fmt;
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default, Zeroable, Pod)]
+#[derive(Copy, Clone, Debug, Default, Zeroable, Pod, PartialEq)]
 pub struct Pix {
     pub colour: wvec3!(u32, 4),
 }

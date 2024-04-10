@@ -5,7 +5,7 @@ use bytemuck::{Pod, Zeroable};
 use paste::paste;
 
 // TODO: WScalars; AbstractInt, AbstractFloat, f16
-pub trait WScalars: Copy + Zeroable {}
+pub trait WScalars: Copy + Zeroable + Default {}
 impl WScalars for bool {}
 impl WScalars for u32 {}
 impl WScalars for i32 {}
@@ -52,13 +52,13 @@ macro_rules! wvec_def_struct {
     ($struct:ident { $($fields:ident),* }, $pad:expr) => {
         paste! {
             #[repr(C)]
-            #[derive(Copy, Clone, Debug, Default, Zeroable)]
+            #[derive(Copy, Clone, Debug, Default, Zeroable, PartialEq)]
             pub struct [< $struct P $pad >] <T>
             where
                 T: WScalars,
             {
                 $(pub $fields: T,)*
-                _pad: [u8; $pad],
+                pub _pad: [u8; $pad],
             }
 
             unsafe impl<T> Pod for [< $struct P $pad >]<T>
@@ -142,6 +142,13 @@ wvec_def!(
     wvec4,
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 );
+
+#[macro_export]
+macro_rules! wpad {
+    ($pad:expr) => {
+        [u8; $pad]
+    };
+}
 
 pub type WMat3x3Affine = WMat<f32, 3, 3, 4>;
 

@@ -1,17 +1,23 @@
 use pollster::FutureExt;
+use rand::distributions::Distribution;
 use rustwarp::{
-    core::{WMat, WVec2P0},
+    core::WMat,
     image::{Image, Pix, Size},
     modules::warp_perspective::{
         warp_perspective_cpu, warp_perspective_gpu, ImageTransform, Interpolation,
     },
     setup::WState,
+    tester::{self, WTestable, WType},
+    wpad, wtest, wvec3,
 };
 
 type M = [[f32; 3]; 3];
 type WM = WMat<f32, 3, 3, 4>;
+#[allow(unused)]
 const IDENTITY: M = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+#[allow(unused)]
 const SCALE_XY: M = [[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+#[allow(unused)]
 const TRANSLATE_XY: M = [[1.0, 0.0, 200.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 const ROTATE: M = [
@@ -22,12 +28,38 @@ const ROTATE: M = [
 
 const MAT: M = ROTATE;
 
-fn main() {
-    let mut x = WVec2P0::new(1.0, 2.0);
-    x.set(2.5, 3.0);
-    println!("{}", x);
-    return;
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, bytemuck::Zeroable, bytemuck::Pod, PartialEq)]
+struct MyStruct {
+    a: wvec3!(f32, 0),
+    b: f32,
+}
 
+impl WTestable for MyStruct {
+    fn wgsl_type() -> WType {
+        WType::Struct("a: vec3<f32>, b: f32")
+    }
+}
+
+impl Distribution<MyStruct> for rand::distributions::Standard {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> MyStruct {
+        let mut r = MyStruct::default();
+        r.a.x = rng.gen();
+        r.a.y = rng.gen();
+        r.a.z = rng.gen();
+        r.b = rng.gen();
+        r
+    }
+}
+
+wtest!(MyStruct, 256);
+
+fn main() {
+    // assert_eq!(
+    //     tester::perform_test::<MyStruct>(256),
+    //     tester::WTestResult::Success
+    // );
+    return;
     let mut state = WState::new().block_on();
 
     let mat = WM::from_row_major(MAT);
