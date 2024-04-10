@@ -5,6 +5,13 @@ use wgpu::util::DeviceExt;
 
 use crate::setup::WState;
 
+pub mod impl_prelude {
+    pub use super::{WTestable, WType};
+    pub use crate::wtest;
+    pub use rand::distributions::Distribution as WDistribution;
+    pub use rand::distributions::Standard as WStandard;
+}
+
 pub enum WType {
     Primitive(&'static str),
     Struct(&'static str),
@@ -64,9 +71,7 @@ where
     let input_bytes = bytemuck::cast_slice(&input_values);
 
     const SHADER: &'static str = r#"
-        struct StructType {
-            {struct_wgsl_type}
-        }
+        {struct_wgsl_type}
     
         @group(0)
         @binding(0)
@@ -88,7 +93,10 @@ where
             .replace("{struct_wgsl_type}", "")
             .replace("{wgsl_type}", t),
         WType::Struct(t) => SHADER
-            .replace("{struct_wgsl_type}", t)
+            .replace(
+                "{struct_wgsl_type}",
+                format!("struct StructType {{ {} }};", t).as_str(),
+            )
             .replace("{wgsl_type}", "StructType"),
     };
 

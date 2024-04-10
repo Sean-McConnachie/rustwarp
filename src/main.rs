@@ -55,11 +55,6 @@ impl Distribution<MyStruct> for rand::distributions::Standard {
 wtest!(MyStruct, 256);
 
 fn main() {
-    // assert_eq!(
-    //     tester::perform_test::<MyStruct>(256),
-    //     tester::WTestResult::Success
-    // );
-    return;
     let mut state = WState::new().block_on();
 
     let mat = WM::from_row_major(MAT);

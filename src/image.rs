@@ -1,11 +1,31 @@
 use bytemuck::{Pod, Zeroable};
 use core::fmt;
 
+use crate::tester::impl_prelude::*;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Zeroable, Pod, PartialEq)]
 pub struct Pix {
     pub colour: wvec3!(u32, 4),
 }
+
+impl WTestable for Pix {
+    fn wgsl_type() -> WType {
+        WType::Primitive("vec3<u32>")
+    }
+}
+
+impl WDistribution<Pix> for WStandard {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Pix {
+        let mut p = Pix::default();
+        p.colour.x = rng.gen();
+        p.colour.y = rng.gen();
+        p.colour.z = rng.gen();
+        p
+    }
+}
+
+wtest!(Pix, 256);
 
 impl Pix {
     pub fn new(r: u32, g: u32, b: u32) -> Self {
