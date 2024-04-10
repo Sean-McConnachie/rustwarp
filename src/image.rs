@@ -6,60 +6,59 @@ use crate::tester::impl_prelude::*;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Zeroable, Pod, PartialEq)]
 pub struct Pix {
-    pub colour: wvec3!(u32, 4),
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    // TODO
+    pub _a: u8,
 }
 
 impl WTestable for Pix {
     fn wgsl_type() -> WType {
-        WType::Primitive("vec3<u32>")
+        WType::Primitive("u32")
     }
 }
 
 impl WDistribution<Pix> for WStandard {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Pix {
-        let mut p = Pix::default();
-        p.colour.x = rng.gen();
-        p.colour.y = rng.gen();
-        p.colour.z = rng.gen();
-        p
+        Pix {
+            r: rng.gen(),
+            g: rng.gen(),
+            b: rng.gen(),
+            _a: rng.gen(),
+        }
     }
 }
 
 wtest!(Pix, 256);
 
 impl Pix {
-    pub fn new(r: u32, g: u32, b: u32) -> Self {
-        let mut p = Self::default();
-        p.colour.x = r;
-        p.colour.y = g;
-        p.colour.z = b;
-        p
+    pub fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, _a: a }
     }
 
     pub fn mult(&self, v: f32) -> Self {
-        let mut s = Self::clone(&self);
-        s.colour.x = (s.colour.x as f32 * v) as u32;
-        s.colour.y = (s.colour.y as f32 * v) as u32;
-        s.colour.z = (s.colour.z as f32 * v) as u32;
-        s
+        Self {
+            r: (self.r as f32 * v) as u8,
+            g: (self.g as f32 * v) as u8,
+            b: (self.b as f32 * v) as u8,
+            _a: (self._a as f32 * v) as u8,
+        }
     }
 
     pub fn add(&self, other: &Self) -> Self {
-        let mut s = Self::clone(&self);
-        s.colour.x += other.colour.x;
-        s.colour.y += other.colour.y;
-        s.colour.z += other.colour.z;
-        s
+        Self {
+            r: self.r.saturating_add(other.r),
+            g: self.g.saturating_add(other.g),
+            b: self.b.saturating_add(other.b),
+            _a: self._a.saturating_add(other._a),
+        }
     }
 }
 
 impl fmt::Display for Pix {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "({}, {}, {})",
-            self.colour.x, self.colour.y, self.colour.z
-        )
+        write!(f, "({}, {}, {})", self.r, self.g, self.b)
     }
 }
 
@@ -116,11 +115,7 @@ impl TryInto<image::RgbImage> for &Image {
         let mut im = image::RgbImage::new(self.size.x as u32, self.size.y as u32);
         for (x, y, pixel) in im.enumerate_pixels_mut() {
             let p = self.get(x as usize, y as usize);
-            *pixel = image::Rgb([
-                p.colour.x.try_into()?,
-                p.colour.y.try_into()?,
-                p.colour.z.try_into()?,
-            ]);
+            *pixel = image::Rgb([p.r.try_into()?, p.g.try_into()?, p.b.try_into()?]);
         }
         Ok(im)
     }

@@ -31,23 +31,25 @@ const MAT: M = ROTATE;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, bytemuck::Zeroable, bytemuck::Pod, PartialEq)]
 struct MyStruct {
-    a: wvec3!(f32, 0),
-    b: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
 }
 
 impl WTestable for MyStruct {
     fn wgsl_type() -> WType {
-        WType::Struct("a: vec3<f32>, b: f32")
+        WType::Primitive("u32")
     }
 }
 
 impl Distribution<MyStruct> for rand::distributions::Standard {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> MyStruct {
         let mut r = MyStruct::default();
-        r.a.x = rng.gen();
-        r.a.y = rng.gen();
-        r.a.z = rng.gen();
+        r.r = rng.gen();
+        r.g = rng.gen();
         r.b = rng.gen();
+        r.a = rng.gen();
         r
     }
 }
@@ -69,11 +71,11 @@ fn main() {
         let total = BOX_SIZE * 8;
         let mut c = 0;
         let mut set_pix = |pix: &mut Pix| {
-            pix.colour.x = 255;
-            pix.colour.y = 255;
+            pix.r = 255;
+            pix.g = 255;
             let z = ((c as f32 / total as f32) * 255.0) as u32;
             let z = z.min(255);
-            pix.colour.z = z;
+            pix.b = z as u8;
             c += 1;
         };
         for y in hh - BOX_SIZE..hh + BOX_SIZE {

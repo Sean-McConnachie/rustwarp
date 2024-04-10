@@ -49,14 +49,14 @@ pub fn warp_perspective_cpu(
                 Interpolation::None => {
                     if pn.0 < src.size.x && pn.1 < src.size.y {
                         let pix = src.get(pn.0, pn.1);
-                        dst.get_mut(x, y).colour = pix.colour;
+                        *dst.get_mut(x, y) = *pix;
                     } else {
-                        dst.get_mut(x, y).colour = Pix::default().colour;
+                        *dst.get_mut(x, y) = Pix::default();
                     }
                 }
                 Interpolation::Bilinear => {
                     if pn.0 <= 0 || pn.0 >= dst.size.x - 1 || pn.1 <= 0 || pn.1 >= dst.size.y - 1 {
-                        dst.get_mut(x, y).colour = Pix::new(0, 0, 0).colour;
+                        *dst.get_mut(x, y) = Pix::new(0, 0, 0, 0);
                         continue;
                     }
                     let pd = (pt.0 - pn.0 as f32, pt.1 - pn.1 as f32);
@@ -66,7 +66,7 @@ pub fn warp_perspective_cpu(
                     let v1 = src.get(pn.0 + 1, pn.1).mult(pd.0 * (1 as f32 - pd.1));
                     let v2 = src.get(pn.0, pn.1 + 1).mult((1 as f32 - pd.0) * pd.1);
                     let v3 = src.get(pn.0 + 1, pn.1 + 1).mult(pd.0 * pd.1);
-                    dst.get_mut(x, y).colour = v0.add(&v1).add(&v2).add(&v3).colour;
+                    *dst.get_mut(x, y) = v0.add(&v1).add(&v2).add(&v3);
                 }
             }
         }

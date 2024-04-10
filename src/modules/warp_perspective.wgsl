@@ -4,6 +4,8 @@ struct ImageTransform {
     tmatrix: mat3x3<f32>,
 }
 
+type RGBPixel = u32;
+
 // TODO: Change to uniform?
 @group(0)
 @binding(0)
@@ -11,14 +13,34 @@ var<storage, read> transform: ImageTransform;
 
 @group(0)
 @binding(1)
-var<storage, read> input: array<vec3<u32>>;
+var<storage, read> input: array<RGBPixel>;
 
 @group(0)
 @binding(2)
-var<storage, read_write> output: array<vec3<u32>>;
+var<storage, read_write> output: array<RGBPixel>;
 
 fn ind(x: u32, y: u32, width: u32) -> u32 {
     return y * width + x;
+}
+
+fn red(pixel: RGBPixel) -> u32 {
+    return pixel & 0xFFu;
+}
+
+fn green(pixel: RGBPixel) -> u32 {
+    return (pixel >> 8u) & 0xFFu;
+}
+
+fn blue(pixel: RGBPixel) -> u32 {
+    return (pixel >> 16u) & 0xFFu;
+}
+
+fn vec3f_from_pixel(pixel: RGBPixel) -> vec3<f32> {
+    return vec3<f32>(f32(red(pixel)), f32(green(pixel)), f32(blue(pixel)));
+}
+
+fn pixel_from_vec3u(v: vec3<u32>) -> RGBPixel {
+    return (u32(v.x)) | (u32(v.y) << 8u) | (u32(v.z) << 16u);
 }
 
 @compute
@@ -57,10 +79,10 @@ fn interpolation_bilinear(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Fractional part
     let fpart = vec2<f32>(fpos.x - rpos.x, fpos.y - rpos.y);
 
-    let p0 = (1.0 - fpart.x) * (1.0 - fpart.y) * vec3<f32>(input[ind(ipos.x, ipos.y, transform.odim.x)]);
-    let p1 = fpart.x * (1.0 - fpart.y) * vec3<f32>(input[ind(ipos.x + 1u, ipos.y, transform.odim.x)]);
-    let p2 = (1.0 - fpart.x) * fpart.y * vec3<f32>(input[ind(ipos.x, ipos.y + 1u, transform.odim.x)]);
-    let p3 = fpart.x * fpart.y * vec3<f32>(input[ind(ipos.x + 1u, ipos.y + 1u, transform.odim.x)]);
+    let p0 = (1.0 - fpart.x) * (1.0 - fpart.y) * vec3f_from_pixel(input[ind(ipos.x, ipos.y, transform.odim.x)]);
+    let p1 = fpart.x * (1.0 - fpart.y) * vec3f_from_pixel(input[ind(ipos.x + 1u, ipos.y, transform.odim.x)]);
+    let p2 = (1.0 - fpart.x) * fpart.y * vec3f_from_pixel(input[ind(ipos.x, ipos.y + 1u, transform.odim.x)]);
+    let p3 = fpart.x * fpart.y * vec3f_from_pixel(input[ind(ipos.x + 1u, ipos.y + 1u, transform.odim.x)]);
 
-    output[ind(global_id.x, global_id.y, transform.odim.x)] = vec3<u32>(p0 + p1 + p2 + p3);
+    output[ind(global_id.x, global_id.y, transform.odim.x)] = pixel_from_vec3u(vec3<u32>(p0 + p1 + p2 + p3));
 }
