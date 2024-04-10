@@ -12,6 +12,7 @@ pub mod impl_prelude {
     pub use rand::distributions::Standard as WStandard;
 }
 
+#[derive(Debug, PartialEq)]
 pub enum WType {
     Primitive(&'static str),
     Struct(&'static str),
@@ -19,6 +20,13 @@ pub enum WType {
 
 pub trait WTestable {
     fn wgsl_type() -> WType;
+
+    fn inner_type() -> &'static str {
+        match Self::wgsl_type() {
+            WType::Primitive(inner) => inner,
+            WType::Struct(inner) => inner,
+        }
+    }
 }
 
 impl WTestable for bool {

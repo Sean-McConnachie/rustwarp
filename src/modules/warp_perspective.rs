@@ -6,13 +6,15 @@ use crate::{
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use crate::tester::impl_prelude::*;
+
 pub enum Interpolation {
     None,
     Bilinear,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default, Zeroable, Pod)]
+#[derive(Copy, Clone, Debug, Default, Zeroable, Pod, PartialEq)]
 pub struct ImageTransform {
     pub dimensions: wvec2!(u32, 8),
     pub inverse_matrix: WMat3x3Affine,
@@ -27,6 +29,23 @@ impl ImageTransform {
         s
     }
 }
+
+impl WTestable for ImageTransform {
+    fn wgsl_type() -> WType {
+        WType::Struct("a: vec2<u32>, b: mat3x3<f32>")
+    }
+}
+
+impl WDistribution<ImageTransform> for WStandard {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> ImageTransform {
+        ImageTransform {
+            dimensions: rng.gen(),
+            inverse_matrix: rng.gen(),
+        }
+    }
+}
+
+wtest!(ImageTransform, 256);
 
 pub fn warp_perspective_cpu(
     transform: &ImageTransform,

@@ -1,5 +1,4 @@
 use pollster::FutureExt;
-use rand::distributions::Distribution;
 use rustwarp::{
     core::WMat,
     image::{Image, Pix, Size},
@@ -7,8 +6,6 @@ use rustwarp::{
         warp_perspective_cpu, warp_perspective_gpu, ImageTransform, Interpolation,
     },
     setup::WState,
-    tester::{self, WTestable, WType},
-    wpad, wtest, wvec3,
 };
 
 type M = [[f32; 3]; 3];
@@ -27,34 +24,6 @@ const ROTATE: M = [
 ];
 
 const MAT: M = ROTATE;
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default, bytemuck::Zeroable, bytemuck::Pod, PartialEq)]
-struct MyStruct {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-}
-
-impl WTestable for MyStruct {
-    fn wgsl_type() -> WType {
-        WType::Primitive("u32")
-    }
-}
-
-impl Distribution<MyStruct> for rand::distributions::Standard {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> MyStruct {
-        let mut r = MyStruct::default();
-        r.r = rng.gen();
-        r.g = rng.gen();
-        r.b = rng.gen();
-        r.a = rng.gen();
-        r
-    }
-}
-
-wtest!(MyStruct, 256);
 
 fn main() {
     let mut state = WState::new().block_on();

@@ -4,6 +4,8 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 use bytemuck::{Pod, Zeroable};
 use paste::paste;
 
+use crate::tester::impl_prelude::*;
+
 // TODO: WScalars; AbstractInt, AbstractFloat, f16
 pub trait WScalars: Copy + Zeroable + Default {}
 impl WScalars for bool {}
@@ -49,7 +51,7 @@ macro_rules! wvec_print_fields {
 }
 
 macro_rules! wvec_def_struct {
-    ($struct:ident { $($fields:ident),* }, $pad:expr) => {
+    ($struct:ident { $($fields:ident),* }, $pad:expr, $wgpu_type:expr) => {
         paste! {
             #[repr(C)]
             #[derive(Copy, Clone, Debug, Default, Zeroable, PartialEq)]
@@ -89,17 +91,36 @@ macro_rules! wvec_def_struct {
                     $(self.$fields = $fields;)*
                 }
             }
+
+            impl<T: WScalars> WTestable for [< $struct P $pad >]<T> {
+                fn wgsl_type() -> WType {
+                    $wgpu_type
+                }
+            }
+
+            impl<T: WScalars> WDistribution<[< $struct P $pad >]<T>> for WStandard
+            where
+                T: WScalars,
+                WStandard: WDistribution<T>,
+            {
+                fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> [< $struct P $pad >]<T> {
+                    [< $struct P $pad >] {
+                        $($fields: rng.gen(),)*
+                        _pad: [0; $pad],
+                    }
+                }
+            }
         }
     };
 }
 
 macro_rules! wvec_def_struct_recursion {
-    ($struct:ident { $($fields:ident),* }, [ $pad:expr, $($rem:tt),* ]) => {
-        wvec_def_struct!($struct { $($fields),* }, $pad);
-        wvec_def_struct_recursion!($struct { $($fields),* }, [ $($rem),* ]);
+    ($struct:ident { $($fields:ident),* }, [ $pad:expr, $($rem:tt),* ], $wgpu_type:expr) => {
+        wvec_def_struct!($struct { $($fields),* }, $pad, $wgpu_type);
+        wvec_def_struct_recursion!($struct { $($fields),* }, [ $($rem),* ], $wgpu_type);
     };
-    ($struct:ident { $($fields:ident),* }, [ $pad:expr ]) => {
-        wvec_def_struct!($struct { $($fields),* }, $pad);
+    ($struct:ident { $($fields:ident),* }, [ $pad:expr ], $wgpu_type:expr) => {
+        wvec_def_struct!($struct { $($fields),* }, $pad, $wgpu_type);
     };
 }
 
@@ -119,8 +140,8 @@ macro_rules! wvec_def_macro_impl {
 }
 
 macro_rules! wvec_def {
-    ($struct:ident { $($fields:ident),* }, $macro:ident, [ $($pads:expr),* ]) => {
-        wvec_def_struct_recursion!($struct { $($fields),* }, [ $($pads),* ]);
+    ($struct:ident { $($fields:ident),* }, $macro:ident, [ $($pads:expr),* ], $wgpu_type:expr) => {
+        wvec_def_struct_recursion!($struct { $($fields),* }, [ $($pads),* ], $wgpu_type);
         wvec_def_macro_impl!($struct, $macro, [ $($pads),* ]);
     };
 }
@@ -128,19 +149,22 @@ macro_rules! wvec_def {
 wvec_def!(
     WVec2 { x, y },
     wvec2,
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+    WType::Primitive("vec2<f32>")
 );
 
 wvec_def!(
     WVec3 { x, y, z },
     wvec3,
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+    WType::Primitive("vec3<f32>")
 );
 
 wvec_def!(
     WVec4 { x, y, z, w },
     wvec4,
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    WType::Primitive("vec4<f32>")
 );
 
 #[macro_export]
@@ -153,7 +177,7 @@ macro_rules! wpad {
 pub type WMat3x3Affine = WMat<f32, 3, 3, 4>;
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default, Zeroable)]
+#[derive(Copy, Clone, Debug, Default, Zeroable, PartialEq)]
 pub struct WMat<T, const N: usize, const M: usize, const FORCED_M: usize>([[T; FORCED_M]; N])
 where
     T: WScalars,
@@ -189,6 +213,38 @@ where
         }
         write!(f, " ]")?;
         Ok(())
+    }
+}
+
+impl<T: WScalars, const N: usize, const M: usize, const FORCED_M: usize> WTestable
+    for WMat<T, N, M, FORCED_M>
+where
+    T: WScalars + fmt::Display + WTestable,
+    [[T; FORCED_M]; N]: Default + Zeroable,
+{
+    fn wgsl_type() -> WType {
+        // TODO: Will this actually cause a leak?
+        let s: &'static str =
+            Box::leak(format!("mat{}x{}<{}>", N, M, T::inner_type()).into_boxed_str());
+        WType::Primitive(s)
+    }
+}
+
+impl<T: WScalars, const N: usize, const M: usize, const FORCED_M: usize>
+    WDistribution<WMat<T, N, M, FORCED_M>> for WStandard
+where
+    T: WScalars,
+    WStandard: WDistribution<T>,
+    [[T; FORCED_M]; N]: Default + Zeroable,
+{
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> WMat<T, N, M, FORCED_M> {
+        let mut m = WMat::default();
+        for i in 0..N {
+            for j in 0..M {
+                m.0[i][j] = rng.gen();
+            }
+        }
+        m
     }
 }
 
