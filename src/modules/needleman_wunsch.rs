@@ -4,6 +4,8 @@ use crate::{setup::WState, tester::impl_prelude::*};
 
 type NucleotideInt = u32;
 
+const PRINT: bool = false;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Nucleotide {
     A,
@@ -19,6 +21,18 @@ impl From<&str> for Nucleotide {
             "c" | "C" => Nucleotide::C,
             "g" | "G" => Nucleotide::G,
             "t" | "T" => Nucleotide::T,
+            _ => panic!("Invalid nucleotide"),
+        }
+    }
+}
+
+impl WDistribution<Nucleotide> for WStandard {
+    fn sample<R: rand::prelude::Rng + ?Sized>(&self, rng: &mut R) -> Nucleotide {
+        match rng.gen_range(0..4) {
+            0 => Nucleotide::A,
+            1 => Nucleotide::C,
+            2 => Nucleotide::G,
+            3 => Nucleotide::T,
             _ => panic!("Invalid nucleotide"),
         }
     }
@@ -79,8 +93,11 @@ pub fn needleman_wunsch_cpu(
     mismatch_penalty: i32,
     match_score: i32,
 ) -> i32 {
-    let s1 = &seq1.0;
-    let s2 = &seq2.0;
+    let (s1, s2) = if seq1.0.len() >= seq2.0.len() {
+        (&seq2.0, &seq1.0)
+    } else {
+        (&seq1.0, &seq2.0)
+    };
 
     let mut matrix = vec![vec![0; s2.len() + 1]; s1.len() + 1];
 
@@ -105,6 +122,15 @@ pub fn needleman_wunsch_cpu(
                 matrix[i - 1][j] + gap_penalty,
                 matrix[i][j - 1] + gap_penalty
             );
+        }
+    }
+
+    if PRINT {
+        for i in 0..s1.len() + 1 {
+            for j in 0..s2.len() + 1 {
+                print!("{:4} ", matrix[i][j]);
+            }
+            println!();
         }
     }
 
@@ -158,6 +184,15 @@ pub mod gpu {
         mismatch_penalty: i32,
         match_score: i32,
     ) -> i32 {
+        let (seq1, seq2) = if seq1.0.len() >= seq2.0.len() {
+            (seq2, seq1)
+        } else {
+            (seq1, seq2)
+        };
+        let n = seq2.0.len();
+        let m = seq1.0.len();
+        assert!(n >= m);
+
         let cs_module = state
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -165,7 +200,6 @@ pub mod gpu {
                 source: wgpu::ShaderSource::Wgsl(include_str!("needleman_wunsch.wgsl").into()),
             });
 
-        let start = std::time::Instant::now();
         let features = state.device.features();
         let query_set = if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
             Some(state.device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -178,26 +212,22 @@ pub mod gpu {
         };
 
         let info = NWInfo {
-            seq1_len: seq1.0.len() as u32 + 1,
-            seq2_len: seq2.0.len() as u32 + 1,
+            seq1_len: seq1.0.len() as u32,
+            seq2_len: seq2.0.len() as u32,
             gap_penalty: gap_penalty as i32,
             mismatch_penalty: mismatch_penalty as i32,
             match_score: match_score as i32,
         };
 
-        let (seq1, seq2) = if seq1.0.len() >= seq2.0.len() {
-            (seq2, seq1)
-        } else {
-            (seq1, seq2)
+        let scores: Vec<Score> = vec![0; ((n + 1) * (m + 1)) as usize];
+        let print_scores = |scores: &[Score], n: usize, m: usize| {
+            for j in 0..m {
+                for i in 0..n {
+                    print!("{:4} ", scores[j * n + i]);
+                }
+                println!();
+            }
         };
-        let n = seq2.0.len();
-        let m = seq1.0.len();
-
-        assert!(n >= m);
-
-        let b1 = vec![0; n + 1];
-        let b2 = vec![0; n + 1];
-        let b3 = vec![0; n + 1];
 
         let seq1_ints: Vec<NucleotideInt> = seq1.0.iter().map(|n| n.into()).collect();
         let seq2_ints: Vec<NucleotideInt> = seq2.0.iter().map(|n| n.into()).collect();
@@ -205,9 +235,7 @@ pub mod gpu {
         let info_bytes = bytemuck::bytes_of(&info);
         let seq1_bytes: &[u8] = bytemuck::cast_slice(&seq1_ints);
         let seq2_bytes: &[u8] = bytemuck::cast_slice(&seq2_ints);
-        let b1_bytes: &[u8] = bytemuck::cast_slice(&b1);
-        let b2_bytes: &[u8] = bytemuck::cast_slice(&b2);
-        let b3_bytes: &[u8] = bytemuck::cast_slice(&b3);
+        let score_bytes: &[u8] = bytemuck::cast_slice(&scores);
 
         let info_buf = state
             .device
@@ -230,36 +258,18 @@ pub mod gpu {
                 contents: seq2_bytes,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             });
-        let b1_buf = state
+        let scores_buf = state
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Matrix Buffer"),
-                contents: b1_bytes,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-            });
-        let b2_buf = state
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Matrix Buffer"),
-                contents: b2_bytes,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-            });
-        let b3_buf = state
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Matrix Buffer"),
-                contents: b3_bytes,
+                contents: score_bytes,
                 usage: wgpu::BufferUsages::STORAGE
                     | wgpu::BufferUsages::COPY_DST
                     | wgpu::BufferUsages::COPY_SRC,
             });
         let out_buf = state.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Matrix output buffer"),
-            size: b1_bytes.len() as u64,
+            size: score_bytes.len() as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -321,26 +331,6 @@ pub mod gpu {
                             binding: 4,
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 5,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 6,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
                                 ty: wgpu::BufferBindingType::Storage { read_only: true },
                                 has_dynamic_offset: false,
                                 min_binding_size: None,
@@ -348,7 +338,7 @@ pub mod gpu {
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
-                            binding: 7,
+                            binding: 5,
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::Buffer {
                                 ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -377,9 +367,10 @@ pub mod gpu {
                 entry_point: "main",
             });
 
+        let start = std::time::Instant::now();
         for pass in 0..(n + m + 1) as u32 {
             let max_i = min!(m as u32, (n + m) as u32 - pass, pass);
-            println!("Pass: {} | max_i: {}", pass, max_i);
+            // println!("Pass: {} | max_i: {}", pass, max_i);
 
             let pass_bytes = bytemuck::bytes_of(&pass);
             let max_i_bytes = bytemuck::bytes_of(&pass);
@@ -417,22 +408,14 @@ pub mod gpu {
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: b1_buf.as_entire_binding(),
+                        resource: scores_buf.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 4,
-                        resource: b2_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: b3_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
                         resource: pass_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 7,
+                        binding: 5,
                         resource: max_i_buffer.as_entire_binding(),
                     },
                 ],
@@ -453,100 +436,12 @@ pub mod gpu {
                 encoder.write_timestamp(query_set, 1);
             }
             state.queue.submit(Some(encoder.finish()));
-
-            for i in 0..3 {
-                let mut encoder = state.device.create_command_encoder(&Default::default());
-                // Get data out of device
-                match i % 3 {
-                    0 => {
-                        print!("\tusing b1\t");
-                        encoder.copy_buffer_to_buffer(
-                            &b1_buf,
-                            0,
-                            &out_buf,
-                            0,
-                            b1_bytes.len() as u64,
-                        );
-                    }
-                    1 => {
-                        print!("\tusing b2\t");
-                        encoder.copy_buffer_to_buffer(
-                            &b2_buf,
-                            0,
-                            &out_buf,
-                            0,
-                            b2_bytes.len() as u64,
-                        );
-                    }
-                    2 => {
-                        print!("\tusing b3\t");
-                        encoder.copy_buffer_to_buffer(
-                            &b3_buf,
-                            0,
-                            &out_buf,
-                            0,
-                            b2_bytes.len() as u64,
-                        );
-                    }
-                    _ => unreachable!(),
-                }
-                if let Some(query_set) = &query_set {
-                    encoder.resolve_query_set(query_set, 0..2, &query_buf, 0);
-                }
-                state.queue.submit(Some(encoder.finish()));
-
-                let out_slice = out_buf.slice(..);
-                let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
-                out_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
-
-                // More queries
-                let query_slice = query_buf.slice(..);
-                let _query_future = query_slice.map_async(wgpu::MapMode::Read, |_| ());
-                // println!("pre-poll {:?}", std::time::Instant::now());
-                state.device.poll(wgpu::Maintain::Wait);
-
-                // println!("post-poll {:?}", std::time::Instant::now());
-                let mut score = UNDEFINED;
-                if let Some(Ok(())) = receiver.receive().await {
-                    let data_raw = &*out_slice.get_mapped_range();
-                    let data: &[Score] = bytemuck::cast_slice(data_raw);
-                    println!("{:?}", data);
-                    score = data[data.len() - 1];
-                }
-
-                query_buf.unmap();
-                out_buf.unmap();
-                if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
-                    // let ts_period = state.queue.get_timestamp_period();
-                    // let ts_data_raw = &*query_slice.get_mapped_range();
-                    // let ts_data: &[u64] = bytemuck::cast_slice(ts_data_raw);
-                    // println!(
-                    //     "compute shader elapsed: {:?}ms",
-                    //     (ts_data[1] - ts_data[0]) as f64 * ts_period as f64 * 1e-6
-                    // );
-                }
-            }
         }
 
-        let b = (n + m) % 3;
         let mut encoder = state.device.create_command_encoder(&Default::default());
         // Get data out of device
 
-        match b {
-            0 => {
-                print!("\tusing b1\t");
-                encoder.copy_buffer_to_buffer(&b1_buf, 0, &out_buf, 0, b1_bytes.len() as u64);
-            }
-            1 => {
-                print!("\tusing b2\t");
-                encoder.copy_buffer_to_buffer(&b2_buf, 0, &out_buf, 0, b2_bytes.len() as u64);
-            }
-            2 => {
-                print!("\tusing b3\t");
-                encoder.copy_buffer_to_buffer(&b3_buf, 0, &out_buf, 0, b2_bytes.len() as u64);
-            }
-            _ => unreachable!(),
-        }
+        encoder.copy_buffer_to_buffer(&scores_buf, 0, &out_buf, 0, score_bytes.len() as u64);
         if let Some(query_set) = &query_set {
             encoder.resolve_query_set(query_set, 0..2, &query_buf, 0);
         }
@@ -563,27 +458,18 @@ pub mod gpu {
         state.device.poll(wgpu::Maintain::Wait);
 
         // println!("post-poll {:?}", std::time::Instant::now());
-        let mut score = UNDEFINED;
+        println!("\nFinal pass:");
         if let Some(Ok(())) = receiver.receive().await {
             let data_raw = &*out_slice.get_mapped_range();
             let data: &[Score] = bytemuck::cast_slice(data_raw);
-            println!("{:?}", data);
-            return data[info.seq2_len as usize - 1];
-        }
 
-        query_buf.unmap();
-        out_buf.unmap();
-        if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
-            // let ts_period = state.queue.get_timestamp_period();
-            // let ts_data_raw = &*query_slice.get_mapped_range();
-            // let ts_data: &[u64] = bytemuck::cast_slice(ts_data_raw);
-            // println!(
-            //     "compute shader elapsed: {:?}ms",
-            //     (ts_data[1] - ts_data[0]) as f64 * ts_period as f64 * 1e-6
-            // );
-        }
+            if PRINT {
+                print_scores(data, n as usize + 1, m as usize + 1);
+            }
 
-        println!("Elapsed: {:?}", start.elapsed());
+            println!("Elapsed: {:?}", start.elapsed());
+            return data[data.len() - 1];
+        }
 
         todo!()
     }
