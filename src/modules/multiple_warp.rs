@@ -120,7 +120,7 @@ impl WarpPerspectiveGpu {
 pub async fn warp_perspective_gpu(
     state: &mut WState,
     cs_module: &wgpu::ShaderModule,
-    transform: &Vec<ImageTransform>,
+    _transform: &Vec<ImageTransform>,
     interp: Interpolation,
     src_bytes: &mut Vec<u8>,
     transform_bytes: &Vec<u8>,
