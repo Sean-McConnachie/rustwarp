@@ -153,7 +153,6 @@ pub mod gpu {
         mismatch_penalty: i32,
         match_score: i32,
     ) -> i64 {
-        panic!("Dynamic programming requires a more complex implementation.");
         let cs_module = state
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -181,16 +180,18 @@ pub mod gpu {
             match_score: match_score as i32,
         };
 
-        let matrix = {
-            let mut m = vec![UNDEFINED; (seq2.0.len() + 1) * (seq1.0.len() + 1)];
-            for i in 0..seq1.0.len() + 1 {
-                m[i * (seq2.0.len() + 1)] = i as i32 * gap_penalty;
-            }
-            for j in 0..seq2.0.len() + 1 {
-                m[j] = j as i32 * gap_penalty;
-            }
-            m
+        let (seq1, seq2) = if seq1.0.len() >= seq2.0.len() {
+            (seq2, seq1)
+        } else {
+            (seq1, seq2)
         };
+        let n = seq2.0.len();
+        let m = seq1.0.len();
+
+        assert!(n >= m);
+
+        let b1 = vec![0; n + 1];
+        let b2 = vec![0; n + 1];
 
         let seq1_ints: Vec<NucleotideInt> = seq1.0.iter().map(|n| n.into()).collect();
         let seq2_ints: Vec<NucleotideInt> = seq2.0.iter().map(|n| n.into()).collect();
@@ -198,7 +199,8 @@ pub mod gpu {
         let info_bytes = bytemuck::bytes_of(&info);
         let seq1_bytes: &[u8] = bytemuck::cast_slice(&seq1_ints);
         let seq2_bytes: &[u8] = bytemuck::cast_slice(&seq2_ints);
-        let matrix_bytes: &[u8] = bytemuck::cast_slice(&matrix);
+        let b1_bytes: &[u8] = bytemuck::cast_slice(&b1);
+        let b2_bytes: &[u8] = bytemuck::cast_slice(&b2);
 
         let info_buf = state
             .device
@@ -221,18 +223,27 @@ pub mod gpu {
                 contents: seq2_bytes,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             });
-        let matrix_buf = state
+        let b1_buf = state
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Matrix Buffer"),
-                contents: matrix_bytes,
+                contents: b1_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+            });
+        let b2_buf = state
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Matrix Buffer"),
+                contents: b2_bytes,
                 usage: wgpu::BufferUsages::STORAGE
                     | wgpu::BufferUsages::COPY_DST
                     | wgpu::BufferUsages::COPY_SRC,
             });
         let out_buf = state.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Matrix output buffer"),
-            size: matrix_bytes.len() as u64,
+            size: b1.len() as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -290,6 +301,16 @@ pub mod gpu {
                             },
                             count: None,
                         },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
                     ],
                 });
 
@@ -328,7 +349,11 @@ pub mod gpu {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: matrix_buf.as_entire_binding(),
+                    resource: b1_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: b2_buf.as_entire_binding(),
                 },
             ],
         });
@@ -347,9 +372,18 @@ pub mod gpu {
         if let Some(query_set) = &query_set {
             encoder.write_timestamp(query_set, 1);
         }
+        state.queue.submit(Some(encoder.finish()));
 
+        let mut encoder = state.device.create_command_encoder(&Default::default());
         // Get data out of device
-        encoder.copy_buffer_to_buffer(&matrix_buf, 0, &out_buf, 0, matrix_bytes.len() as u64);
+        match n % 2 == 0 {
+            true => {
+                encoder.copy_buffer_to_buffer(&b1_buf, 0, &out_buf, 0, b1.len() as u64);
+            }
+            false => {
+                encoder.copy_buffer_to_buffer(&b2_buf, 0, &out_buf, 0, b2.len() as u64);
+            }
+        }
         if let Some(query_set) = &query_set {
             encoder.resolve_query_set(query_set, 0..2, &query_buf, 0);
         }
