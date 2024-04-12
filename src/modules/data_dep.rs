@@ -10,7 +10,8 @@ pub async fn data_dep_gpu(state: &mut WState) {
             source: wgpu::ShaderSource::Wgsl(include_str!("data_dep.wgsl").into()),
         });
 
-    let in_sq = vec![0i32; 4];
+    const N: usize = 4 * 2;
+    let in_sq = vec![0i32; N];
 
     let in_bytes: &[u8] = bytemuck::cast_slice(&in_sq);
 
@@ -76,43 +77,45 @@ pub async fn data_dep_gpu(state: &mut WState) {
             entry_point: "main",
         });
 
-    for i in 0..4 as u32 {
-        let start = std::time::Instant::now();
-        let pass_bytes = bytemuck::bytes_of(&i);
-        let pass_buffer = state
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Pass Buffer"),
-                contents: pass_bytes,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: pass_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: in_buffer.as_entire_binding(),
-                },
-            ],
+    // for i in 0..4 as u32 {
+    let i = 0;
+    let start = std::time::Instant::now();
+    let pass_bytes = bytemuck::bytes_of(&i);
+    let pass_buffer = state
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Pass Buffer"),
+            contents: pass_bytes,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
         });
-        let mut encoder = state.device.create_command_encoder(&Default::default());
-        {
-            let mut cpass = encoder.begin_compute_pass(&Default::default());
-            cpass.set_pipeline(&pipeline);
-            cpass.set_bind_group(0, &bind_group, &[]);
-            cpass.dispatch_workgroups(in_sq.len() as u32, 1, 1);
-        }
-        state.queue.submit(Some(encoder.finish()));
-        println!("Elapsed: {:?}", start.elapsed());
+
+    let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Bind Group"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: pass_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: in_buffer.as_entire_binding(),
+            },
+        ],
+    });
+    let mut encoder = state.device.create_command_encoder(&Default::default());
+    {
+        let mut cpass = encoder.begin_compute_pass(&Default::default());
+        cpass.set_pipeline(&pipeline);
+        cpass.set_bind_group(0, &bind_group, &[]);
+        // cpass.dispatch_workgroups(in_sq.len() as u32, 1, 1);
+        cpass.dispatch_workgroups(N as u32, 1, 1);
     }
+    state.queue.submit(Some(encoder.finish()));
+    println!("Elapsed: {:?}", start.elapsed());
+    // }
 
     let mut encoder = state.device.create_command_encoder(&Default::default());
     // Get data out of device
