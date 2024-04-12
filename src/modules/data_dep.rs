@@ -9,8 +9,18 @@ pub async fn data_dep_gpu(state: &mut WState) {
             label: Some("Compute Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("data_dep.wgsl").into()),
         });
+    let features = state.device.features();
+    let query_set = if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
+        Some(state.device.create_query_set(&wgpu::QuerySetDescriptor {
+            count: 2,
+            ty: wgpu::QueryType::Timestamp,
+            label: None,
+        }))
+    } else {
+        None
+    };
 
-    const N: usize = 4 * 2;
+    const N: usize = 64 * 4 * 2;
     let in_sq = vec![0i32; N];
 
     let in_bytes: &[u8] = bytemuck::cast_slice(&in_sq);
@@ -30,6 +40,13 @@ pub async fn data_dep_gpu(state: &mut WState) {
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
+    let query_buf = state
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Query buffer"),
+            contents: &[0; 16],
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        });
 
     let bind_group_layout =
         state
@@ -106,12 +123,18 @@ pub async fn data_dep_gpu(state: &mut WState) {
         ],
     });
     let mut encoder = state.device.create_command_encoder(&Default::default());
+    if let Some(query_set) = &query_set {
+        encoder.write_timestamp(query_set, 0);
+    }
     {
         let mut cpass = encoder.begin_compute_pass(&Default::default());
         cpass.set_pipeline(&pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
         // cpass.dispatch_workgroups(in_sq.len() as u32, 1, 1);
         cpass.dispatch_workgroups(N as u32, 1, 1);
+    }
+    if let Some(query_set) = &query_set {
+        encoder.write_timestamp(query_set, 1);
     }
     state.queue.submit(Some(encoder.finish()));
     println!("Elapsed: {:?}", start.elapsed());
@@ -120,6 +143,10 @@ pub async fn data_dep_gpu(state: &mut WState) {
     let mut encoder = state.device.create_command_encoder(&Default::default());
     // Get data out of device
     encoder.copy_buffer_to_buffer(&in_buffer, 0, &out_buf, 0, in_bytes.len() as u64);
+
+    if let Some(query_set) = &query_set {
+        encoder.resolve_query_set(query_set, 0..2, &query_buf, 0);
+    }
     state.queue.submit(Some(encoder.finish()));
 
     let out_slice = out_buf.slice(..);
@@ -127,9 +154,22 @@ pub async fn data_dep_gpu(state: &mut WState) {
     out_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
 
     // More queries
+    let query_slice = query_buf.slice(..);
+    let _query_future = query_slice.map_async(wgpu::MapMode::Read, |_| ());
+    // println!("pre-poll {:?}", std::time::Instant::now());
     state.device.poll(wgpu::Maintain::Wait);
+    // println!("post-poll {:?}", std::time::Instant::now());
 
-    println!("post-poll {:?}", std::time::Instant::now());
+    if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
+        let ts_period = state.queue.get_timestamp_period();
+        let ts_data_raw = &*query_slice.get_mapped_range();
+        let ts_data: &[u64] = bytemuck::cast_slice(ts_data_raw);
+        println!(
+            "compute shader elapsed: {:?}ms",
+            (ts_data[1] - ts_data[0]) as f64 * ts_period as f64 * 1e-6
+        );
+    }
+
     if let Some(Ok(())) = receiver.receive().await {
         let data_raw = &*out_slice.get_mapped_range();
         let data: &[i32] = bytemuck::cast_slice(data_raw);

@@ -6,31 +6,27 @@ var<storage, read> rpass: u32;
 @binding(1)
 var<storage, read_write> input: array<i32>;
 
-let UNDEFINED = -9999i;
-// let workgroup_len = 3i;
-var<workgroup> iter: u32 = 0u;
-var<workgroup> workgroup_data: array<i32, 4>;
+let workgroup_len = 64i;
+var<workgroup> workgroup_data: array<i32, workgroup_len>;
 
-@compute
-@workgroup_size(4, 1, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-    var found = false;
-    if lid.x == 0u {
-        iter = 1u;
-        workgroup_data[0u] = 1i;
-        found = true;
-    } else {
-        workgroup_data[lid.x] = UNDEFINED;
-    }
-
-    workgroupBarrier();
-    for (var i: u32 = 1u; i < 4u; i = i + 1u) {
-        if workgroup_data[i - 1u] != UNDEFINED && !found && i >= lid.x {
-            workgroup_data[lid.x] = workgroup_data[i - 1u] + 1i;
-            found = true;
+fn spin(k: u32) {
+    for (var i: u32 = 0u; i < u32(workgroup_len); i = i + 1u) {
+        if i == k {
+            return;
         }
         workgroupBarrier();
     }
+}
+
+@compute
+@workgroup_size(64, 1, 1) // must match workgroup_len
+fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    spin(lid.x);
+    if lid.x == 0u {
+        workgroup_data[0u] = 1i;
+    }
+    workgroup_data[lid.x] = workgroup_data[lid.x - 1u] + 1i;
+
     input[gid.x] = workgroup_data[lid.x];
 }
 
