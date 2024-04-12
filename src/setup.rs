@@ -5,7 +5,12 @@ pub struct WState {
 
 impl WState {
     pub async fn new() -> Self {
-        let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
+        // let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            flags: wgpu::InstanceFlags::default(),
+            ..Default::default()
+        });
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -20,8 +25,8 @@ impl WState {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
-                    limits: Default::default(),
+                    required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+                    required_limits: Default::default(),
                 },
                 None,
             )
@@ -90,6 +95,9 @@ macro_rules! wgpu_usage_literal {
     };
     (INDIRECT) => {
         wgpu::BufferUsages::INDIRECT
+    };
+    (QUERY_RESOLVE) => {
+        wgpu::BufferUsages::QUERY_RESOLVE
     };
 }
 
@@ -249,4 +257,66 @@ macro_rules! wgpu_bind_group {
     ($name:expr, $dev:expr, $layout:expr, [$(($bind:expr, $resource:expr)),*]) => {
         wgpu_bind_group!($dev, $layout, [$(($bind, $resource)),*], label=Some($name))
     };
+}
+
+pub struct WTsQueryState {
+    pub max_count: u32,
+    pub current: u32,
+    pub set: wgpu::QuerySet,
+    pub buf: wgpu::Buffer,
+    pub out: wgpu::Buffer,
+}
+
+impl WTsQueryState {
+    pub fn new(dev: &wgpu::Device, c: u32) -> Self {
+        WTsQueryState {
+            max_count: c,
+            current: 0,
+            set: dev.create_query_set(&wgpu::QuerySetDescriptor {
+                label: None,
+                count: c,
+                ty: wgpu::QueryType::Timestamp,
+            }),
+            buf: wgpu_buf!(
+                dev,
+                c as u64 * 8,
+                [QUERY_RESOLVE | STORAGE | COPY_SRC | COPY_DST],
+                false
+            ),
+            out: wgpu_buf!(dev, 16, [MAP_READ | COPY_DST], false),
+        }
+    }
+
+    pub fn write(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        assert!(
+            self.current < self.max_count,
+            "Timestamp query count exceeded"
+        );
+        encoder.write_timestamp(&self.set, self.current);
+        self.current += 1;
+    }
+
+    pub fn resolve(&self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.resolve_query_set(&self.set, 0..self.max_count, &self.buf, 0);
+        encoder.copy_buffer_to_buffer(&self.buf, 0, &self.out, 0, self.max_count as u64 * 8);
+    }
+
+    pub fn map_async(&mut self) -> (usize, wgpu::BufferSlice) {
+        let query_slice = self.out.slice(..);
+        query_slice.map_async(wgpu::MapMode::Read, move |_| ());
+        (self.max_count as usize, query_slice)
+    }
+
+    pub fn read(count: usize, slice: wgpu::BufferSlice) -> Vec<u64> {
+        let data = slice.get_mapped_range();
+        let mut result = Vec::with_capacity(count);
+        for i in 0..count {
+            let start = i as usize * 8;
+            let end = start + 8;
+            let bytes = &data[start..end];
+            let value = u64::from_ne_bytes(bytes.try_into().unwrap());
+            result.push(value);
+        }
+        result
+    }
 }

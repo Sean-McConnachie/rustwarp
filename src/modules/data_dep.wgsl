@@ -6,7 +6,7 @@ var<storage, read> rpass: u32;
 @binding(1)
 var<storage, read_write> input: array<i32>;
 
-let workgroup_len = 64i;
+const workgroup_len: u32 = 64;
 var<workgroup> workgroup_data: array<i32, workgroup_len>;
 
 fn spin(k: u32) {

@@ -1,152 +1,52 @@
 use wgpu::util::DeviceExt;
 
-use crate::setup::WState;
+use crate::setup::*;
 
 pub async fn data_dep_gpu(state: &mut WState) {
-    let cs_module = state
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Compute Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("data_dep.wgsl").into()),
-        });
-    let features = state.device.features();
-    let query_set = if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
-        Some(state.device.create_query_set(&wgpu::QuerySetDescriptor {
-            count: 2,
-            ty: wgpu::QueryType::Timestamp,
-            label: None,
-        }))
-    } else {
-        None
-    };
+    let dev = &state.device;
+
+    let cs_module = wgpu_shader_load!(dev, include_str!("data_dep.wgsl"));
+    let mut query_state = WTsQueryState::new(dev, 2);
 
     const N: usize = 64 * 4 * 2;
     let in_sq = vec![0i32; N];
+    let in_bytes: &[u8] = wbyte_cast!(&in_sq);
 
-    let in_bytes: &[u8] = bytemuck::cast_slice(&in_sq);
+    let in_buffer = wgpu_buf_init!(dev, in_bytes, [STORAGE | COPY_SRC | COPY_DST]);
+    let out_buf = wgpu_buf!(dev, in_bytes.len() as u64, [MAP_READ | COPY_DST], false);
 
-    let in_buffer = state
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Input Buffer"),
-            contents: in_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
-    let out_buf = state.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Output Buffer"),
-        size: in_bytes.len() as u64,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let query_buf = state
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Query buffer"),
-            contents: &[0; 16],
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        });
+    let bind_group_layout = wgpu_bind_group_layout_compute!(dev, [(0, true), (1, false)]);
+    let compute_pipeline_layout = wgpu_compute_pipeline_layout!(dev, &[&bind_group_layout]);
+    let pipeline = wgpu_compute_pipeline!(dev, &compute_pipeline_layout, &cs_module, "main");
 
-    let bind_group_layout =
-        state
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Bind Group Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-    let compute_pipeline_layout =
-        state
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Compute Pipeline Layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
-            });
-    let pipeline = state
-        .device
-        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Compute Pipeline"),
-            layout: Some(&compute_pipeline_layout),
-            module: &cs_module,
-            entry_point: "main",
-        });
-
-    // for i in 0..4 as u32 {
     let i = 0;
-    let start = std::time::Instant::now();
-    let pass_bytes = bytemuck::bytes_of(&i);
-    let pass_buffer = state
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Pass Buffer"),
-            contents: pass_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+    let pass_bytes = wbyte_of!(&i);
+    let pass_buffer = wgpu_buf_init!(dev, pass_bytes, [STORAGE | COPY_SRC | COPY_DST]);
 
-    let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Bind Group"),
-        layout: &bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: pass_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: in_buffer.as_entire_binding(),
-            },
-        ],
-    });
+    let bind_group = wgpu_bind_group!(
+        dev,
+        &bind_group_layout,
+        [
+            (0, pass_buffer.as_entire_binding()),
+            (1, in_buffer.as_entire_binding())
+        ]
+    );
+
     let mut encoder = state.device.create_command_encoder(&Default::default());
-    if let Some(query_set) = &query_set {
-        encoder.write_timestamp(query_set, 0);
-    }
+    query_state.write(&mut encoder);
     {
         let mut cpass = encoder.begin_compute_pass(&Default::default());
         cpass.set_pipeline(&pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
-        // cpass.dispatch_workgroups(in_sq.len() as u32, 1, 1);
         cpass.dispatch_workgroups(N as u32, 1, 1);
     }
-    if let Some(query_set) = &query_set {
-        encoder.write_timestamp(query_set, 1);
-    }
+    query_state.write(&mut encoder);
     state.queue.submit(Some(encoder.finish()));
-    println!("Elapsed: {:?}", start.elapsed());
-    // }
 
     let mut encoder = state.device.create_command_encoder(&Default::default());
     // Get data out of device
     encoder.copy_buffer_to_buffer(&in_buffer, 0, &out_buf, 0, in_bytes.len() as u64);
-
-    if let Some(query_set) = &query_set {
-        encoder.resolve_query_set(query_set, 0..2, &query_buf, 0);
-    }
+    query_state.resolve(&mut encoder);
     state.queue.submit(Some(encoder.finish()));
 
     let out_slice = out_buf.slice(..);
@@ -154,21 +54,15 @@ pub async fn data_dep_gpu(state: &mut WState) {
     out_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
 
     // More queries
-    let query_slice = query_buf.slice(..);
-    let _query_future = query_slice.map_async(wgpu::MapMode::Read, |_| ());
-    // println!("pre-poll {:?}", std::time::Instant::now());
+    let (query_count, query_slice) = query_state.map_async();
     state.device.poll(wgpu::Maintain::Wait);
-    // println!("post-poll {:?}", std::time::Instant::now());
 
-    if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
-        let ts_period = state.queue.get_timestamp_period();
-        let ts_data_raw = &*query_slice.get_mapped_range();
-        let ts_data: &[u64] = bytemuck::cast_slice(ts_data_raw);
-        println!(
-            "compute shader elapsed: {:?}ms",
-            (ts_data[1] - ts_data[0]) as f64 * ts_period as f64 * 1e-6
-        );
-    }
+    let ts_data = WTsQueryState::read(query_count, query_slice);
+    let ts_period = state.queue.get_timestamp_period();
+    println!(
+        "compute shader elapsed: {:?}ms",
+        (ts_data[1] - ts_data[0]) as f64 * ts_period as f64 * 1e-6
+    );
 
     if let Some(Ok(())) = receiver.receive().await {
         let data_raw = &*out_slice.get_mapped_range();
