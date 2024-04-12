@@ -52,6 +52,17 @@ macro_rules! wbyte_of {
 }
 
 #[macro_export]
+macro_rules! wstring_replace {
+    ($str:expr, $from:expr, $to:expr) => {
+        $str.replace($v, $to)
+    };
+    ($str:expr, [$(($from:expr, $to:expr)),*]) => {
+        $str
+            $(.replace($from, $to))*
+    };
+}
+
+#[macro_export]
 macro_rules! wgpu_shader_load {
     ($dev:expr, $shader:expr, label=$label:expr) => {
         $dev.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -318,5 +329,10 @@ impl WTsQueryState {
             result.push(value);
         }
         result
+    }
+
+    pub fn reset(&mut self) {
+        self.current = 0;
+        self.out.unmap();
     }
 }

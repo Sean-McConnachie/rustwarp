@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 
-use crate::{setup::WState, tester::impl_prelude::*};
+use crate::{setup::*, tester::impl_prelude::*};
 
 type NucleotideInt = u32;
 
@@ -188,28 +188,19 @@ pub mod gpu {
         } else {
             (seq1, seq2)
         };
+        const WG_COLS: u32 = 2;
+        const WG_ROWS: u32 = 2;
         let n = seq2.0.len();
         let m = seq1.0.len();
-        assert!(n >= m);
 
-        let cs_module = state
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Needleman Wunsch Compute Shader Module"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("needleman_wunsch.wgsl").into()),
-            });
-
-        let features = state.device.features();
-        let query_set = if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
-            Some(state.device.create_query_set(&wgpu::QuerySetDescriptor {
-                count: 2,
-                ty: wgpu::QueryType::Timestamp,
-                label: None,
-            }))
-        } else {
-            None
+        let round_up = |numerator: u32, denominator: u32| -> u32 {
+            (numerator + denominator - 1) / denominator
         };
 
+        let n_blocks = round_up(n as u32, WG_COLS);
+        let m_blocks = round_up(m as u32, WG_ROWS);
+
+        assert!(n >= m);
         let info = NWInfo {
             seq1_len: seq1.0.len() as u32,
             seq2_len: seq2.0.len() as u32,
@@ -217,6 +208,17 @@ pub mod gpu {
             mismatch_penalty: mismatch_penalty as i32,
             match_score: match_score as i32,
         };
+
+        let dev = &state.device;
+        let shader = wstring_replace!(
+            include_str!("needleman_wunsch.wgsl"),
+            [
+                ("{{WG_COLS}}", &WG_COLS.to_string()),
+                ("{{WG_ROWS}}", &WG_ROWS.to_string())
+            ]
+        );
+        let cs_module = wgpu_shader_load!(state.device, shader);
+        let mut ts_query = WTsQueryState::new(&state.device, 2);
 
         let scores: Vec<Score> = vec![0; ((n + 1) * (m + 1)) as usize];
         let print_scores = |scores: &[Score], n: usize, m: usize| {
@@ -231,219 +233,74 @@ pub mod gpu {
         let seq1_ints: Vec<NucleotideInt> = seq1.0.iter().map(|n| n.into()).collect();
         let seq2_ints: Vec<NucleotideInt> = seq2.0.iter().map(|n| n.into()).collect();
 
-        let info_bytes = bytemuck::bytes_of(&info);
-        let seq1_bytes: &[u8] = bytemuck::cast_slice(&seq1_ints);
-        let seq2_bytes: &[u8] = bytemuck::cast_slice(&seq2_ints);
-        let score_bytes: &[u8] = bytemuck::cast_slice(&scores);
+        let info_bytes = wbyte_of!(&info);
+        let seq1_bytes: &[u8] = wbyte_cast!(&seq1_ints);
+        let seq2_bytes: &[u8] = wbyte_cast!(&seq2_ints);
+        let score_bytes: &[u8] = wbyte_cast!(&scores);
 
-        let info_buf = state
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("NW Info Buffer"),
-                contents: info_bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            });
-        let seq1_buf = state
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Sequence 1 Buffer"),
-                contents: seq1_bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            });
-        let seq2_buf = state
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Sequence 2 Buffer"),
-                contents: seq2_bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            });
-        let scores_buf = state
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Matrix Buffer"),
-                contents: score_bytes,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-            });
-        let out_buf = state.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Matrix output buffer"),
-            size: score_bytes.len() as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let query_buf = state
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Query buffer"),
-                contents: &[0; 16],
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            });
+        let info_buf = wgpu_buf_init!(dev, info_bytes, [STORAGE | COPY_SRC]);
+        let seq1_buf = wgpu_buf_init!(dev, seq1_bytes, [STORAGE | COPY_SRC]);
+        let seq2_buf = wgpu_buf_init!(dev, seq2_bytes, [STORAGE | COPY_SRC]);
+        let scores_buf = wgpu_buf_init!(dev, score_bytes, [STORAGE | COPY_SRC | COPY_DST]);
+        let out_buf = wgpu_buf!(dev, score_bytes.len() as u64, [MAP_READ | COPY_DST], false);
 
-        let bind_group_layout =
-            state
-                .device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("NW Bind Group Layout"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 3,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 4,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 5,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
+        let bind_group_layout = wgpu_bind_group_layout_compute!(
+            dev,
+            [(0, true), (1, true), (2, true), (3, false), (4, true)]
+        );
+        let compute_pipeline_layout = wgpu_compute_pipeline_layout!(dev, &[&bind_group_layout]);
+        let pipeline = wgpu_compute_pipeline!(dev, &compute_pipeline_layout, &cs_module, "main");
 
-        let compute_pipeline_layout =
-            state
-                .device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Computer Pipeline"),
-                    bind_group_layouts: &[&bind_group_layout],
-                    push_constant_ranges: &[],
-                });
-        let pipeline = state
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Main pipeline"),
-                layout: Some(&compute_pipeline_layout),
-                module: &cs_module,
-                entry_point: "main",
-            });
+        println!("n_blocks: {}\tm_blocks: {}", n_blocks, m_blocks);
+        for pass in 0..(n_blocks + m_blocks - 1) as u32 {
+            let max_diag = min!(m_blocks as u32, (n_blocks + m_blocks) as u32 - pass, pass) + 1;
+            let num_cells = max_diag * WG_COLS * WG_ROWS;
+            println!(
+                "Pass: {}\tmax_diag: {}\tnum_cells: {}",
+                pass, max_diag, num_cells
+            );
 
-        let start = std::time::Instant::now();
-        for pass in 0..(n + m + 1) as u32 {
-            let max_i = min!(m as u32, (n + m) as u32 - pass, pass);
-            // println!("Pass: {} | max_i: {}", pass, max_i);
+            let pass_bytes = wbyte_of!(&pass);
+            let pass_buffer = wgpu_buf_init!(dev, pass_bytes, [STORAGE | COPY_SRC]);
 
-            let pass_bytes = bytemuck::bytes_of(&pass);
-            let max_i_bytes = bytemuck::bytes_of(&pass);
-
-            let pass_buffer = state
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Pass Buffer"),
-                    contents: pass_bytes,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                });
-            let max_i_buffer = state
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Max i Buffer"),
-                    contents: max_i_bytes,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                });
-
-            let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("NW Bind Group"),
-                layout: &bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: info_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: seq1_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: seq2_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: scores_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: pass_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: max_i_buffer.as_entire_binding(),
-                    },
-                ],
-            });
-            // Encoder
+            let bind_group = wgpu_bind_group!(
+                dev,
+                &bind_group_layout,
+                [
+                    (0, info_buf.as_entire_binding()),
+                    (1, seq1_buf.as_entire_binding()),
+                    (2, seq2_buf.as_entire_binding()),
+                    (3, scores_buf.as_entire_binding()),
+                    (4, pass_buffer.as_entire_binding())
+                ]
+            );
             let mut encoder = state.device.create_command_encoder(&Default::default());
-            if let Some(query_set) = &query_set {
-                encoder.write_timestamp(query_set, 0);
-            }
-
+            ts_query.write(&mut encoder);
             {
                 let mut cpass = encoder.begin_compute_pass(&Default::default());
                 cpass.set_pipeline(&pipeline);
                 cpass.set_bind_group(0, &bind_group, &[]);
-                cpass.dispatch_workgroups(max_i + 1, 1, 1);
+                cpass.dispatch_workgroups(num_cells + 1, 1, 1);
             }
-            if let Some(query_set) = &query_set {
-                encoder.write_timestamp(query_set, 1);
-            }
+            ts_query.write(&mut encoder);
             state.queue.submit(Some(encoder.finish()));
+
+            {
+                // Time the compute shader
+                let (query_count, query_slice) = ts_query.map_async();
+                state.device.poll(wgpu::Maintain::Wait);
+                let ts_data = WTsQueryState::read(query_count, query_slice);
+                let ts_period = state.queue.get_timestamp_period();
+                println!(
+                    "compute shader elapsed: {:?}ms",
+                    (ts_data[1] - ts_data[0]) as f64 * ts_period as f64 * 1e-6
+                );
+                ts_query.reset();
+            }
         }
 
         let mut encoder = state.device.create_command_encoder(&Default::default());
-        // Get data out of device
-
         encoder.copy_buffer_to_buffer(&scores_buf, 0, &out_buf, 0, score_bytes.len() as u64);
-        if let Some(query_set) = &query_set {
-            encoder.resolve_query_set(query_set, 0..2, &query_buf, 0);
-        }
         state.queue.submit(Some(encoder.finish()));
 
         let out_slice = out_buf.slice(..);
@@ -451,12 +308,7 @@ pub mod gpu {
         out_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
 
         // More queries
-        let query_slice = query_buf.slice(..);
-        let _query_future = query_slice.map_async(wgpu::MapMode::Read, |_| ());
-        // println!("pre-poll {:?}", std::time::Instant::now());
         state.device.poll(wgpu::Maintain::Wait);
-
-        // println!("post-poll {:?}", std::time::Instant::now());
         println!("\nFinal pass:");
         if let Some(Ok(())) = receiver.receive().await {
             let data_raw = &*out_slice.get_mapped_range();
@@ -466,7 +318,6 @@ pub mod gpu {
                 print_scores(data, n as usize + 1, m as usize + 1);
             }
 
-            println!("Elapsed: {:?}", start.elapsed());
             return data[data.len() - 1];
         }
 

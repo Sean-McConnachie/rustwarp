@@ -1,4 +1,4 @@
-// /*
+/*
 use rustwarp::{modules::data_dep::data_dep_gpu, setup::WState};
 
 #[tokio::main]
@@ -7,8 +7,9 @@ async fn main() {
     data_dep_gpu(&mut state).await;
 }
 
-// */
-/*
+*/
+// /*
+use rand::{Rng, SeedableRng};
 use rustwarp::{
     modules::needleman_wunsch::{needleman_wunsch_cpu, needleman_wunsch_gpu, Nucleotide, Sequence},
     setup::WState,
@@ -18,7 +19,7 @@ use rustwarp::{
 async fn main() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let seq1: Sequence = Sequence(
-        (0..2048)
+        (0..4)
             .map(|_| {
                 let nuc: Nucleotide = rng.gen();
                 nuc
@@ -26,7 +27,7 @@ async fn main() {
             .collect::<Vec<_>>(),
     );
     let seq2: Sequence = Sequence(
-        (0..1024)
+        (0..4)
             .map(|_| {
                 let nuc: Nucleotide = rng.gen();
                 nuc
@@ -57,4 +58,4 @@ async fn main() {
     assert_eq!(score, result);
     println!("GPU and CPU results are equal!")
 }
-*/
+// */

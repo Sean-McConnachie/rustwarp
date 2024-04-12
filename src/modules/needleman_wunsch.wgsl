@@ -8,10 +8,8 @@ struct NWInfo {
     match_score: i32,
 }
 
-type Nucleotite = u32;
-type Score = i32;
-
-let UNDEFINED: Score = -2147483648i;
+alias Nucleotite = u32;
+alias Score = i32;
 
 @group(0)
 @binding(0)
@@ -33,9 +31,11 @@ var<storage, read_write> scores: array<Score>;
 @binding(4)
 var<storage, read> rpass: u32;
 
-@group(0)
-@binding(5)
-var<storage, read> max_x: u32;
+const WG_COLS: u32 = {{WG_COLS}};
+const WG_ROWS: u32 = {{WG_ROWS}};
+const WG_SHARED_SIZE: u32 = WG_COLS * WG_ROWS;
+
+var<workgroup> block: array<Score, WG_SHARED_SIZE>;
 
 fn get_score(x: u32, y: u32) -> Score {
     return scores[y * (info.seq2_len + 1u) + x];
@@ -46,7 +46,7 @@ fn set_score(x: u32, y: u32, score: Score) {
 }
 
 @compute
-@workgroup_size(1)
+@workgroup_size(WG_COLS, WG_ROWS, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
 
