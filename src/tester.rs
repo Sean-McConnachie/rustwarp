@@ -3,7 +3,7 @@ use pollster::FutureExt;
 use rand::{distributions::Standard, prelude::*};
 use wgpu::util::DeviceExt;
 
-use crate::setup::WState;
+use crate::setup::*;
 
 pub mod impl_prelude {
     pub use super::{WTestable, WType};
@@ -76,7 +76,7 @@ where
 {
     let mut rng = thread_rng();
     let input_values: Vec<T> = (0..n).map(|_| rng.gen()).collect();
-    let input_bytes = bytemuck::cast_slice(&input_values);
+    let input_bytes = wbyte_cast!(&input_values);
 
     const SHADER: &'static str = r#"
         {struct_wgsl_type}
@@ -112,94 +112,46 @@ where
     let output_result = async {
         let state = WState::new().await;
 
-        let cs_module = state
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Compute shader"),
-                source: wgpu::ShaderSource::Wgsl(shader.into()),
-            });
+        let cs_module = wgpu_shader_load!("Compute shader", state.device, shader);
 
-        let input_buf = state
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Input image buffer"),
-                contents: input_bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            });
-        let copied_buf = state.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Copied buffer"),
-            size: input_bytes.len() as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let output_buf = state.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Output buffer"),
-            size: input_bytes.len() as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let input_buf = wgpu_buf_init!(
+            "Input buffer",
+            state.device,
+            input_bytes,
+            [STORAGE | COPY_SRC]
+        );
+        let copied_buf = wgpu_buf!(
+            "Copied buffer",
+            state.device,
+            input_bytes.len() as u64,
+            [STORAGE | COPY_DST | COPY_SRC],
+            false
+        );
+        let output_buf = wgpu_buf!(
+            "Output buffer",
+            state.device,
+            input_bytes.len() as u64,
+            [MAP_READ | COPY_DST],
+            false
+        );
 
         let bind_group_layout =
-            state
-                .device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("Bind group layout"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
+            wgpu_bind_group_layout_compute!(state.device, [(0, true), (1, false)]);
 
         let compute_pipeline_layout =
-            state
-                .device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Compute pipeline layout"),
-                    bind_group_layouts: &[&bind_group_layout],
-                    push_constant_ranges: &[],
-                });
-        let pipeline = state
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("Main pipeline"),
-                layout: Some(&compute_pipeline_layout),
-                module: &cs_module,
-                entry_point: "main",
-            });
-        let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Bind group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: copied_buf.as_entire_binding(),
-                },
-            ],
-        });
+            wgpu_compute_pipeline_layout!(state.device, &[&bind_group_layout]);
+
+        let pipeline =
+            wgpu_compute_pipeline!(state.device, &compute_pipeline_layout, &cs_module, "main");
+
+        let bind_group = wgpu_bind_group!(
+            state.device,
+            &bind_group_layout,
+            [
+                (0, input_buf.as_entire_binding()),
+                (1, copied_buf.as_entire_binding())
+            ]
+        );
 
         let mut encoder = state.device.create_command_encoder(&Default::default());
 

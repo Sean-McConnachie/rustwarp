@@ -1,7 +1,7 @@
 use crate::{
-    core::WMat3x3Affine,
     image::{Image, Pix, Size},
     setup::WState,
+    types::WMat3x3Affine,
 };
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;

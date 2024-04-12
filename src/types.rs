@@ -131,7 +131,7 @@ macro_rules! wvec_def_macro_impl {
             macro_rules! $macro {
                 $(
                     ($typ:ty, [< $pad >]) => {
-                        $crate::core::[< $struct P $pad >]<$typ>
+                        $crate::types::[< $struct P $pad >]<$typ>
                     };
                 )*
             }

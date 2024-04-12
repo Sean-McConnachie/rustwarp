@@ -144,7 +144,6 @@ pub mod gpu {
     use super::*;
 
     pub type Score = i32;
-    const UNDEFINED: Score = -2147483648;
 
     #[repr(C)]
     #[derive(Debug, Clone, Copy, Pod, Zeroable, Default, PartialEq)]
