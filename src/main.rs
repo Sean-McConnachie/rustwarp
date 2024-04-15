@@ -1,4 +1,17 @@
 /*
+use rustwarp::{
+    modules::invocations::{self, invocations_gpu},
+    setup::WState,
+};
+
+#[tokio::main]
+async fn main() {
+    let mut state = WState::new().await;
+    invocations_gpu(&mut state).await;
+}
+
+*/
+/*
 use rustwarp::{modules::data_dep::data_dep_gpu, setup::WState};
 
 #[tokio::main]
@@ -19,7 +32,7 @@ use rustwarp::{
 async fn main() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let seq1: Sequence = Sequence(
-        (0..4)
+        (0..1024)
             .map(|_| {
                 let nuc: Nucleotide = rng.gen();
                 nuc
@@ -27,7 +40,7 @@ async fn main() {
             .collect::<Vec<_>>(),
     );
     let seq2: Sequence = Sequence(
-        (0..4)
+        (0..1024)
             .map(|_| {
                 let nuc: Nucleotide = rng.gen();
                 nuc

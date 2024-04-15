@@ -188,8 +188,8 @@ pub mod gpu {
         } else {
             (seq1, seq2)
         };
-        const WG_COLS: u32 = 2;
-        const WG_ROWS: u32 = 2;
+        const WG_COLS: u32 = 16;
+        const WG_ROWS: u32 = 16;
         let n = seq2.0.len();
         let m = seq1.0.len();
 
@@ -197,8 +197,28 @@ pub mod gpu {
             (numerator + denominator - 1) / denominator
         };
 
-        let n_blocks = round_up(n as u32, WG_COLS);
-        let m_blocks = round_up(m as u32, WG_ROWS);
+        let n_blocks = round_up(1 + n as u32, WG_COLS);
+        let m_blocks = round_up(1 + m as u32, WG_ROWS);
+
+        // let cell_counts = {
+        //     let mut counts = vec![vec![0; n_blocks as usize]; m_blocks as usize];
+        //     for j in 0..m_blocks {
+        //         for i in 0..n_blocks {
+        //             let x = if i == n_blocks - 1 {
+        //                 1 + n as u32 - i * WG_COLS
+        //             } else {
+        //                 WG_COLS
+        //             };
+        //             let y = if j == m_blocks - 1 {
+        //                 1 + m as u32 - j * WG_ROWS
+        //             } else {
+        //                 WG_ROWS
+        //             };
+        //             counts[j as usize][i as usize] = x * y;
+        //         }
+        //     }
+        //     counts
+        // };
 
         assert!(n >= m);
         let info = NWInfo {
@@ -222,11 +242,13 @@ pub mod gpu {
 
         let scores: Vec<Score> = vec![0; ((n + 1) * (m + 1)) as usize];
         let print_scores = |scores: &[Score], n: usize, m: usize| {
-            for j in 0..m {
-                for i in 0..n {
-                    print!("{:4} ", scores[j * n + i]);
+            if PRINT {
+                for j in 0..m {
+                    for i in 0..n {
+                        print!("{:4} ", scores[j * n + i]);
+                    }
+                    println!();
                 }
-                println!();
             }
         };
 
@@ -246,22 +268,46 @@ pub mod gpu {
 
         let bind_group_layout = wgpu_bind_group_layout_compute!(
             dev,
-            [(0, true), (1, true), (2, true), (3, false), (4, true)]
+            [
+                (0, true),
+                (1, true),
+                (2, true),
+                (3, false),
+                (4, true),
+                (5, true)
+            ]
         );
         let compute_pipeline_layout = wgpu_compute_pipeline_layout!(dev, &[&bind_group_layout]);
         let pipeline = wgpu_compute_pipeline!(dev, &compute_pipeline_layout, &cs_module, "main");
 
+        let start = std::time::Instant::now();
         println!("n_blocks: {}\tm_blocks: {}", n_blocks, m_blocks);
         for pass in 0..(n_blocks + m_blocks - 1) as u32 {
-            let max_diag = min!(m_blocks as u32, (n_blocks + m_blocks) as u32 - pass, pass) + 1;
+            let max_diag = if pass < n_blocks {
+                min!(pass + 1, m_blocks)
+            } else {
+                min!(pass - n_blocks + 1, n_blocks)
+            };
+            // let num_cells = (0..max_diag)
+            //     .map(|i| {
+            //         let x = pass - i - (max!(0, 1 + pass as i32 - n_blocks as i32) as u32);
+            //         let y = i + (max!(0, pass as i32 - n_blocks as i32) as u32);
+            //         cell_counts[y as usize][x as usize]
+            //     })
+            //     .sum::<u32>();
             let num_cells = max_diag * WG_COLS * WG_ROWS;
-            println!(
-                "Pass: {}\tmax_diag: {}\tnum_cells: {}",
-                pass, max_diag, num_cells
-            );
+            if PRINT {
+                println!(
+                    "pass: {}\tnum_cells: {}\tmax_diag: {}",
+                    pass, num_cells, max_diag
+                );
+            }
 
             let pass_bytes = wbyte_of!(&pass);
+            let max_diag_bytes = wbyte_of!(&max_diag);
+
             let pass_buffer = wgpu_buf_init!(dev, pass_bytes, [STORAGE | COPY_SRC]);
+            let max_diag_buffer = wgpu_buf_init!(dev, max_diag_bytes, [STORAGE | COPY_SRC]);
 
             let bind_group = wgpu_bind_group!(
                 dev,
@@ -271,7 +317,8 @@ pub mod gpu {
                     (1, seq1_buf.as_entire_binding()),
                     (2, seq2_buf.as_entire_binding()),
                     (3, scores_buf.as_entire_binding()),
-                    (4, pass_buffer.as_entire_binding())
+                    (4, pass_buffer.as_entire_binding()),
+                    (5, max_diag_buffer.as_entire_binding())
                 ]
             );
             let mut encoder = state.device.create_command_encoder(&Default::default());
@@ -280,7 +327,7 @@ pub mod gpu {
                 let mut cpass = encoder.begin_compute_pass(&Default::default());
                 cpass.set_pipeline(&pipeline);
                 cpass.set_bind_group(0, &bind_group, &[]);
-                cpass.dispatch_workgroups(num_cells + 1, 1, 1);
+                cpass.dispatch_workgroups(num_cells, 1, 1);
             }
             ts_query.write(&mut encoder);
             state.queue.submit(Some(encoder.finish()));
@@ -291,13 +338,42 @@ pub mod gpu {
                 state.device.poll(wgpu::Maintain::Wait);
                 let ts_data = WTsQueryState::read(query_count, query_slice);
                 let ts_period = state.queue.get_timestamp_period();
-                println!(
-                    "compute shader elapsed: {:?}ms",
-                    (ts_data[1] - ts_data[0]) as f64 * ts_period as f64 * 1e-6
-                );
+                if PRINT {
+                    println!(
+                        "compute shader elapsed: {:?}ms",
+                        (ts_data[1] - ts_data[0]) as f64 * ts_period as f64 * 1e-6
+                    );
+                }
                 ts_query.reset();
             }
+
+            if PRINT {
+                let mut encoder = state.device.create_command_encoder(&Default::default());
+                encoder.copy_buffer_to_buffer(
+                    &scores_buf,
+                    0,
+                    &out_buf,
+                    0,
+                    score_bytes.len() as u64,
+                );
+                state.queue.submit(Some(encoder.finish()));
+
+                let out_slice = out_buf.slice(..);
+                let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
+                out_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+
+                // More queries
+                state.device.poll(wgpu::Maintain::Wait);
+                if let Some(Ok(())) = receiver.receive().await {
+                    let data_raw = &*out_slice.get_mapped_range();
+                    let data: &[Score] = bytemuck::cast_slice(data_raw);
+                    print_scores(data, n as usize + 1, m as usize + 1);
+                }
+                out_buf.unmap();
+                println!();
+            }
         }
+        println!("GPU took: {:?}", start.elapsed());
 
         let mut encoder = state.device.create_command_encoder(&Default::default());
         encoder.copy_buffer_to_buffer(&scores_buf, 0, &out_buf, 0, score_bytes.len() as u64);
@@ -313,11 +389,7 @@ pub mod gpu {
         if let Some(Ok(())) = receiver.receive().await {
             let data_raw = &*out_slice.get_mapped_range();
             let data: &[Score] = bytemuck::cast_slice(data_raw);
-
-            if PRINT {
-                print_scores(data, n as usize + 1, m as usize + 1);
-            }
-
+            print_scores(data, n as usize + 1, m as usize + 1);
             return data[data.len() - 1];
         }
 

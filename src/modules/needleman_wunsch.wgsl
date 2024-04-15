@@ -31,48 +31,119 @@ var<storage, read_write> scores: array<Score>;
 @binding(4)
 var<storage, read> rpass: u32;
 
+@group(0)
+@binding(5)
+var<storage, read> max_diag: u32;
+
 const WG_COLS: u32 = {{WG_COLS}};
 const WG_ROWS: u32 = {{WG_ROWS}};
-const WG_SHARED_SIZE: u32 = WG_COLS * WG_ROWS;
+const WG_SIZE: u32 = WG_COLS * WG_ROWS;
 
-var<workgroup> block: array<Score, WG_SHARED_SIZE>;
+var<workgroup> block: array<Score, WG_SIZE>;
 
-fn get_score(x: u32, y: u32) -> Score {
+fn get_global_score(x: u32, y: u32) -> Score {
     return scores[y * (info.seq2_len + 1u) + x];
 }
 
-fn set_score(x: u32, y: u32, score: Score) {
+fn set_global_score(x: u32, y: u32, score: Score) {
     scores[y * (info.seq2_len + 1u) + x] = score;
 }
 
+fn get_local_score(x: u32, y: u32) -> Score {
+    return block[y * WG_COLS + x];
+}
+
+fn set_local_score(x: u32, y: u32, score: Score) {
+    block[y * WG_COLS + x] = score;
+}
+
+fn spin(k: u32) {
+    for (var i: u32 = 0u; i < 9999u; i = i + 1u) {
+        if i == k {
+            return;
+        }
+        workgroupBarrier();
+    }
+}
+
 @compute
-@workgroup_size(WG_COLS, WG_ROWS, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+@workgroup_size(WG_SIZE, 1, 1)
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(workgroup_id) wid: vec3<u32>
+) {
+    let gbl_i = wid.x;
 
-    let x = rpass - i - u32(max(0i, i32(rpass) - i32(info.seq2_len)));
-    let y = u32(max(0i, i32(rpass) - i32(info.seq2_len))) + i;
+    let blk_x = rpass - gbl_i - u32(max(0i, 1i + i32(rpass) - i32(info.seq2_len)));
+    let blk_y = gbl_i + u32(max(0i, i32(rpass) - i32(info.seq2_len)));
 
-    if x == 0u {
-        set_score(x, y, i32(y) * info.gap_penalty);
+    let lcl_x = lid.x % WG_COLS;
+    let lcl_y = lid.x / WG_COLS;
+    let lcl_i = u32(-(-i32(lcl_y) - i32(lcl_x)));
+
+    let gbl_x = blk_x * WG_COLS + lcl_x;
+    let gbl_y = blk_y * WG_ROWS + lcl_y;
+
+    let max_x = info.seq2_len; // + 1 - 1
+    let max_y = info.seq1_len; // + 1 - 1
+
+    if gbl_x > max_x || gbl_y > max_y {
         return;
     }
-    if y == 0u {
-        set_score(x, y, i32(x) * info.gap_penalty);
+
+    var up: Score;
+    var left: Score;
+    var up_left: Score;
+
+    if gbl_x == 0u {
+        let penalty = i32(gbl_y) * info.gap_penalty;
+        set_local_score(lcl_x, lcl_y, penalty);
+        if lcl_y == WG_ROWS - 1u {
+            set_global_score(gbl_x, gbl_y, penalty);
+        }
         return;
+    }
+    if gbl_y == 0u {
+        let penalty = i32(gbl_x) * info.gap_penalty;
+        set_local_score(lcl_x, lcl_y, penalty);
+        if lcl_x == WG_COLS - 1u {
+            set_global_score(gbl_x, gbl_y, penalty);
+        }
+        return;
+    }
+    spin(lcl_i);
+
+    if lcl_x == 0u && lcl_y == 0u {
+        up = get_global_score(gbl_x, gbl_y - 1u);
+        left = get_global_score(gbl_x - 1u, gbl_y);
+        up_left = get_global_score(gbl_x - 1u, gbl_y - 1u);
+    } else if lcl_x == 0u {
+        up = get_local_score(lcl_x, lcl_y - 1u);
+        left = get_global_score(gbl_x - 1u, gbl_y);
+        up_left = get_global_score(gbl_x - 1u, gbl_y - 1u);
+    } else if lcl_y == 0u {
+        up = get_global_score(gbl_x, gbl_y - 1u);
+        left = get_local_score(lcl_x - 1u, lcl_y);
+        up_left = get_global_score(gbl_x - 1u, gbl_y - 1u);
+    } else {
+        up = get_local_score(lcl_x, lcl_y - 1u);
+        left = get_local_score(lcl_x - 1u, lcl_y);
+        up_left = get_local_score(lcl_x - 1u, lcl_y - 1u);
     }
 
     var match_score: i32;
-    if seq1[y - 1u] == seq2[x - 1u] {
+    if seq1[gbl_y - 1u] == seq2[gbl_x - 1u] {
         match_score = info.match_score;
     } else {
         match_score = info.mismatch_penalty;
     }
+    let score = max(up_left + match_score, max(up + info.gap_penalty, left + info.gap_penalty));
 
-    let up = get_score(x, y - 1u) + info.gap_penalty;
-    let left = get_score(x - 1u, y) + info.gap_penalty;
-    let diag = get_score(x - 1u, y - 1u) + match_score;
-
-    let score = max(max(up, left), diag);
-    set_score(x, y, score);
+    if lcl_x == WG_COLS - 1u || lcl_y == WG_ROWS - 1u || gbl_x == max_x || gbl_y == max_y {
+        set_global_score(gbl_x, gbl_y, score);
+    } else {
+        set_local_score(lcl_x, lcl_y, score);
+        // set_global_score(gbl_x, gbl_y, score);
+    }
 }
