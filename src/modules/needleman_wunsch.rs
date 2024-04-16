@@ -4,7 +4,7 @@ use crate::{setup::*, tester::impl_prelude::*};
 
 type NucleotideInt = u32;
 
-const PRINT: bool = false;
+const PRINT: bool = true;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Nucleotide {
@@ -188,8 +188,8 @@ pub mod gpu {
         } else {
             (seq1, seq2)
         };
-        const WG_COLS: u32 = 16;
-        const WG_ROWS: u32 = 16;
+        const WG_COLS: u32 = 2;
+        const WG_ROWS: u32 = 2;
         let n = seq2.0.len();
         let m = seq1.0.len();
 
@@ -240,7 +240,16 @@ pub mod gpu {
         let cs_module = wgpu_shader_load!(state.device, shader);
         let mut ts_query = WTsQueryState::new(&state.device, 2);
 
-        let scores: Vec<Score> = vec![0; ((n + 1) * (m + 1)) as usize];
+        let scores: Vec<Score> = {
+            let mut s = vec![0; ((n + 1) * (m + 1)) as usize];
+            for i in 0..n + 1 {
+                s[i] = i as i32 * gap_penalty;
+            }
+            for j in 0..m + 1 {
+                s[j * (n + 1) as usize] = j as i32 * gap_penalty;
+            }
+            s
+        };
         let print_scores = |scores: &[Score], n: usize, m: usize| {
             if PRINT {
                 for j in 0..m {

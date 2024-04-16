@@ -58,11 +58,17 @@ fn set_local_score(x: u32, y: u32, score: Score) {
 }
 
 fn spin(k: u32) {
-    for (var i: u32 = 0u; i < 9999u; i = i + 1u) {
+    for (var i: u32 = 0u; i < 999999u; i = i + 1u) {
         if i == k {
             return;
         }
-        workgroupBarrier();
+        if i == 1u {
+            workgroupBarrier();
+            workgroupBarrier();
+        }
+        if i == 2u {
+            workgroupBarrier();
+        }
     }
 }
 
@@ -96,54 +102,57 @@ fn main(
     var left: Score;
     var up_left: Score;
 
-    if gbl_x == 0u {
-        let penalty = i32(gbl_y) * info.gap_penalty;
-        set_local_score(lcl_x, lcl_y, penalty);
-        if lcl_y == WG_ROWS - 1u {
-            set_global_score(gbl_x, gbl_y, penalty);
-        }
-        return;
-    }
-    if gbl_y == 0u {
-        let penalty = i32(gbl_x) * info.gap_penalty;
-        set_local_score(lcl_x, lcl_y, penalty);
-        if lcl_x == WG_COLS - 1u {
-            set_global_score(gbl_x, gbl_y, penalty);
-        }
-        return;
-    }
+    // if gbl_x == 0u {
+    //     let penalty = i32(gbl_y) * info.gap_penalty;
+    //     set_local_score(lcl_x, lcl_y, penalty);
+    //     if lcl_y == WG_ROWS - 1u {
+    //         set_global_score(gbl_x, gbl_y, penalty);
+    //     }
+    //     return;
+    // } else if gbl_y == 0u {
+    //     let penalty = i32(gbl_x) * info.gap_penalty;
+    //     set_local_score(lcl_x, lcl_y, penalty);
+    //     if lcl_x == WG_COLS - 1u {
+    //         set_global_score(gbl_x, gbl_y, penalty);
+    //     }
+    //     return;
+    // }
+
     spin(lcl_i);
 
-    if lcl_x == 0u && lcl_y == 0u {
-        up = get_global_score(gbl_x, gbl_y - 1u);
-        left = get_global_score(gbl_x - 1u, gbl_y);
-        up_left = get_global_score(gbl_x - 1u, gbl_y - 1u);
-    } else if lcl_x == 0u {
-        up = get_local_score(lcl_x, lcl_y - 1u);
-        left = get_global_score(gbl_x - 1u, gbl_y);
-        up_left = get_global_score(gbl_x - 1u, gbl_y - 1u);
-    } else if lcl_y == 0u {
-        up = get_global_score(gbl_x, gbl_y - 1u);
-        left = get_local_score(lcl_x - 1u, lcl_y);
-        up_left = get_global_score(gbl_x - 1u, gbl_y - 1u);
-    } else {
-        up = get_local_score(lcl_x, lcl_y - 1u);
-        left = get_local_score(lcl_x - 1u, lcl_y);
-        up_left = get_local_score(lcl_x - 1u, lcl_y - 1u);
-    }
+    if gbl_x != 0u && gbl_y != 0u {
+        if lcl_x == 0u && lcl_y == 0u {
+            up = get_global_score(gbl_x, gbl_y - 1u);
+            left = get_global_score(gbl_x - 1u, gbl_y);
+            up_left = get_global_score(gbl_x - 1u, gbl_y - 1u);
+        } else if lcl_x == 0u {
+            up = get_local_score(lcl_x, lcl_y - 1u);
+            left = get_global_score(gbl_x - 1u, gbl_y);
+            up_left = get_global_score(gbl_x - 1u, gbl_y - 1u);
+        } else if lcl_y == 0u {
+            up = get_global_score(gbl_x, gbl_y - 1u);
+            left = get_local_score(lcl_x - 1u, lcl_y);
+            up_left = get_global_score(gbl_x - 1u, gbl_y - 1u);
+        } else {
+            up = get_local_score(lcl_x, lcl_y - 1u);
+            left = get_local_score(lcl_x - 1u, lcl_y);
+            up_left = get_local_score(lcl_x - 1u, lcl_y - 1u);
+        }
 
-    var match_score: i32;
-    if seq1[gbl_y - 1u] == seq2[gbl_x - 1u] {
-        match_score = info.match_score;
-    } else {
-        match_score = info.mismatch_penalty;
-    }
-    let score = max(up_left + match_score, max(up + info.gap_penalty, left + info.gap_penalty));
+        var match_score: i32;
+        if seq1[gbl_y - 1u] == seq2[gbl_x - 1u] {
+            match_score = info.match_score;
+        } else {
+            match_score = info.mismatch_penalty;
+        }
+        let score = max(up_left + match_score, max(up + info.gap_penalty, left + info.gap_penalty));
 
-    if lcl_x == WG_COLS - 1u || lcl_y == WG_ROWS - 1u || gbl_x == max_x || gbl_y == max_y {
-        set_global_score(gbl_x, gbl_y, score);
-    } else {
         set_local_score(lcl_x, lcl_y, score);
-        // set_global_score(gbl_x, gbl_y, score);
+        set_global_score(gbl_x, gbl_y, score);
+        set_global_score(0u, 0u, i32(lcl_i)); // should be 2 but it's 1
+
+    // if lcl_x == WG_COLS - 1u || lcl_y == WG_ROWS - 1u || gbl_x == max_x || gbl_y == max_y {
+    //     set_global_score(gbl_x, gbl_y, score);
+    // }
     }
 }
